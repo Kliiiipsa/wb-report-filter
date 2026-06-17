@@ -1,13 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import {
-  ShieldCheck,
-  Download,
-  PlayCircle,
-  AlertTriangle,
-  Info,
-} from "lucide-react";
+import { Download, PlayCircle, AlertTriangle, Info } from "lucide-react";
 import { FileDropzone } from "@/components/FileDropzone";
 import { ArticleInput } from "@/components/ArticleInput";
 import { StatsCards } from "@/components/StatsCards";
@@ -149,13 +143,7 @@ export default function Home() {
     <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
       {/* Шапка */}
       <header className="mb-8">
-        <div className="flex items-center gap-2 text-brand-600">
-          <ShieldCheck className="h-6 w-6" />
-          <span className="text-sm font-semibold uppercase tracking-wide">
-            Прототип · обработка на устройстве
-          </span>
-        </div>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
+        <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
           Фильтр отчетов Wildberries
         </h1>
         <p className="mt-2 max-w-2xl text-slate-600">

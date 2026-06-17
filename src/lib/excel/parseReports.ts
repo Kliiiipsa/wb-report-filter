@@ -23,21 +23,64 @@ export function normalizeArticle(value: unknown): string {
 }
 
 /**
- * Выбирает рабочий лист: приоритет — лист с именем "Sheet1",
- * иначе берем первый лист книги.
+ * Пересчитывает диапазон листа `!ref` по фактическим адресам ячеек.
+ * Нужно для отчётов, где генератор не указал или указал неверный диапазон,
+ * из-за чего SheetJS не видит данные. Безопасно: не меняет содержимое.
  */
-function pickSheet(workbook: XLSX.WorkBook): {
-  sheet: XLSX.WorkSheet;
-  name: string;
-} {
-  if (workbook.SheetNames.length === 0) {
-    throw new ReportParseError("В файле не найдено ни одного листа.");
+function rebuildSheetRef(sheet: XLSX.WorkSheet): void {
+  const addrs = Object.keys(sheet).filter((k) => k[0] !== "!");
+  if (addrs.length === 0) return;
+  let minR = Infinity,
+    minC = Infinity,
+    maxR = -1,
+    maxC = -1;
+  for (const a of addrs) {
+    const c = XLSX.utils.decode_cell(a);
+    if (c.r < minR) minR = c.r;
+    if (c.c < minC) minC = c.c;
+    if (c.r > maxR) maxR = c.r;
+    if (c.c > maxC) maxC = c.c;
   }
-  const preferred = workbook.SheetNames.find(
-    (n) => n.trim().toLowerCase() === "sheet1"
-  );
-  const name = preferred ?? workbook.SheetNames[0];
-  return { sheet: workbook.Sheets[name], name };
+  sheet["!ref"] = XLSX.utils.encode_range({
+    s: { r: minR, c: minC },
+    e: { r: maxR, c: maxC },
+  });
+}
+
+/** Превращает лист в матрицу строк (с восстановлением диапазона при пустом результате). */
+function sheetToMatrix(sheet: XLSX.WorkSheet): unknown[][] {
+  const opts = {
+    header: 1 as const,
+    raw: true,
+    defval: null,
+    blankrows: false,
+  };
+  let matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, opts);
+  if (matrix.length < 2) {
+    rebuildSheetRef(sheet);
+    matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, opts);
+  }
+  return matrix;
+}
+
+/**
+ * Выбирает из книги лист с наибольшим количеством данных.
+ * Приоритет при равенстве — лист с именем "Sheet1", иначе первый.
+ * Не привязываемся жёстко к первому листу: данные отчёта могут лежать на другом.
+ */
+function extractBestSheet(
+  workbook: XLSX.WorkBook
+): { matrix: unknown[][]; sheetName: string } | null {
+  let best: { matrix: unknown[][]; sheetName: string } | null = null;
+  for (const name of workbook.SheetNames) {
+    const sheet = workbook.Sheets[name];
+    if (!sheet) continue;
+    const matrix = sheetToMatrix(sheet);
+    if (!best || matrix.length > best.matrix.length) {
+      best = { matrix, sheetName: name };
+    }
+  }
+  return best;
 }
 
 /**
@@ -75,21 +118,6 @@ function tryReadWorkbook(bytes: Uint8Array): XLSX.WorkBook | null {
   } catch {
     return null;
   }
-}
-
-/** Достаёт матрицу строк из первого/нужного листа книги. */
-function workbookToMatrix(workbook: XLSX.WorkBook): {
-  matrix: unknown[][];
-  sheetName: string;
-} {
-  const { sheet, name } = pickSheet(workbook);
-  const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
-    header: 1,
-    raw: true,
-    defval: null,
-    blankrows: false,
-  });
-  return { matrix, sheetName: name };
 }
 
 /**
@@ -132,29 +160,26 @@ export async function parseReportFile(file: File): Promise<ParsedReport> {
 
   const bytes = new Uint8Array(await file.arrayBuffer());
 
-  // 1) Быстрый путь: читаем файл напрямую (обычные .xlsx).
+  // 1) Быстрый путь: читаем файл напрямую и берём лист с наибольшим
+  //    количеством данных (с восстановлением диапазона при необходимости).
   let matrix: unknown[][] = [];
   let sheetName = "";
   const direct = tryReadWorkbook(bytes);
   if (direct) {
-    try {
-      ({ matrix, sheetName } = workbookToMatrix(direct));
-    } catch {
-      matrix = [];
-    }
+    const best = extractBestSheet(direct);
+    if (best) ({ matrix, sheetName } = best);
   }
 
-  // 2) Фолбэк: если данных нет, нормализуем ZIP-контейнер и пробуем снова.
-  //    Лечит отчёты WB с нестандартной упаковкой без ручного zip/extract.
+  // 2) Фолбэк: если данных всё ещё нет, нормализуем ZIP-контейнер и пробуем
+  //    снова. Лечит отчёты WB с нестандартной упаковкой без ручного zip/extract.
   if (matrix.length < 2) {
     const normalized = normalizeXlsxZip(bytes);
     if (normalized) {
       const wb = tryReadWorkbook(normalized);
       if (wb) {
-        try {
-          ({ matrix, sheetName } = workbookToMatrix(wb));
-        } catch {
-          /* оставляем matrix как есть -> ниже выдадим понятную ошибку */
+        const best = extractBestSheet(wb);
+        if (best && best.matrix.length > matrix.length) {
+          ({ matrix, sheetName } = best);
         }
       }
     }
@@ -162,7 +187,8 @@ export async function parseReportFile(file: File): Promise<ParsedReport> {
 
   if (matrix.length < 2) {
     throw new ReportParseError(
-      `В файле «${file.name}» не найдена таблица с данными.`
+      `В файле «${file.name}» не найдена таблица с данными. ` +
+        `Файл прочитан, но строки не распознаны — пришлите файл, если ошибка повторяется.`
     );
   }
 
