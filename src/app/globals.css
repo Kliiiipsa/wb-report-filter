@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-gradient-to-b from-brand-50 via-white to-white text-slate-800;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Thin custom scrollbar for the preview table */
+.scroll-thin::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  @apply bg-brand-200 rounded-full;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
