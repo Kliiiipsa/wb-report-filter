@@ -24,8 +24,14 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# local env files
+# local env files & secrets — НИКОГДА не коммитим
+.env
+.env.*
 .env*
+/.env/
+/.env/**
+*.token
+secrets/
 
 # test / sample excel reports — do NOT commit these
 *.xlsx
