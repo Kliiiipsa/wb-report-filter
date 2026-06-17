@@ -1,11 +1,11 @@
 import * as XLSX from "xlsx";
-import { unzipSync, zipSync } from "fflate";
 import {
   MAX_FILE_SIZE,
   NMID_HEADER,
   ParsedReport,
   ReportRow,
 } from "@/lib/types";
+import { parseXlsxFast } from "@/lib/excel/fastXlsx";
 
 /** Понятная ошибка обработки отчета. */
 export class ReportParseError extends Error {
@@ -121,26 +121,6 @@ function tryReadWorkbook(bytes: Uint8Array): XLSX.WorkBook | null {
 }
 
 /**
- * Нормализует ZIP-контейнер .xlsx: распаковывает устойчивым распаковщиком
- * (fflate поддерживает варианты ZIP, которые не читает встроенный в SheetJS,
- * например Zip64 / нестандартное сжатие) и запаковывает обратно в чистый
- * стандартный DEFLATE-архив. Это автоматически воспроизводит ручной приём
- * «запаковать в zip и распаковать», лечащий отчёты Wildberries.
- *
- * Всё выполняется в памяти браузера — файл никуда не отправляется.
- */
-function normalizeXlsxZip(bytes: Uint8Array): Uint8Array | null {
-  // .xlsx всегда начинается с сигнатуры ZIP "PK".
-  if (bytes.length < 2 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) return null;
-  try {
-    const entries = unzipSync(bytes);
-    return zipSync(entries, { level: 6 });
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Разбирает один загруженный файл отчета Wildberries.
  * Выполняется на клиенте — файл не отправляется на сервер.
  */
@@ -160,28 +140,22 @@ export async function parseReportFile(file: File): Promise<ParsedReport> {
 
   const bytes = new Uint8Array(await file.arrayBuffer());
 
-  // 1) Быстрый путь: читаем файл напрямую и берём лист с наибольшим
-  //    количеством данных (с восстановлением диапазона при необходимости).
   let matrix: unknown[][] = [];
   let sheetName = "";
-  const direct = tryReadWorkbook(bytes);
-  if (direct) {
-    const best = extractBestSheet(direct);
-    if (best) ({ matrix, sheetName } = best);
-  }
 
-  // 2) Фолбэк: если данных всё ещё нет, нормализуем ZIP-контейнер и пробуем
-  //    снова. Лечит отчёты WB с нестандартной упаковкой без ручного zip/extract.
-  if (matrix.length < 2) {
-    const normalized = normalizeXlsxZip(bytes);
-    if (normalized) {
-      const wb = tryReadWorkbook(normalized);
-      if (wb) {
-        const best = extractBestSheet(wb);
-        if (best && best.matrix.length > matrix.length) {
-          ({ matrix, sheetName } = best);
-        }
-      }
+  // 1) Основной путь: свой быстрый парсер на fflate. Не зависит от заявленного
+  //    диапазона листа и не зависает на больших отчётах WB (сотни МБ XML).
+  const fast = parseXlsxFast(bytes);
+  if (fast) {
+    matrix = fast.matrix;
+    sheetName = fast.sheetName;
+  } else {
+    // 2) Фолбэк только для файлов, которые не распаковались как ZIP
+    //    (иной/повреждённый контейнер). SheetJS здесь безопасен по объёму.
+    const wb = tryReadWorkbook(bytes);
+    if (wb) {
+      const best = extractBestSheet(wb);
+      if (best) ({ matrix, sheetName } = best);
     }
   }
 
