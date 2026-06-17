@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { unzipSync, zipSync } from "fflate";
 import {
   MAX_FILE_SIZE,
   NMID_HEADER,
@@ -67,14 +68,47 @@ function detectNmIdColumn(headers: string[]): string {
   );
 }
 
-/** Читает ArrayBuffer как книгу Excel. */
-function readWorkbook(buffer: ArrayBuffer): XLSX.WorkBook {
+/** Читает байты как книгу Excel (Uint8Array). Возвращает null при ошибке. */
+function tryReadWorkbook(bytes: Uint8Array): XLSX.WorkBook | null {
   try {
-    return XLSX.read(buffer, { type: "array" });
+    return XLSX.read(bytes, { type: "array" });
   } catch {
-    throw new ReportParseError(
-      "Не удалось прочитать файл Excel. Возможно, файл поврежден."
-    );
+    return null;
+  }
+}
+
+/** Достаёт матрицу строк из первого/нужного листа книги. */
+function workbookToMatrix(workbook: XLSX.WorkBook): {
+  matrix: unknown[][];
+  sheetName: string;
+} {
+  const { sheet, name } = pickSheet(workbook);
+  const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+    header: 1,
+    raw: true,
+    defval: null,
+    blankrows: false,
+  });
+  return { matrix, sheetName: name };
+}
+
+/**
+ * Нормализует ZIP-контейнер .xlsx: распаковывает устойчивым распаковщиком
+ * (fflate поддерживает варианты ZIP, которые не читает встроенный в SheetJS,
+ * например Zip64 / нестандартное сжатие) и запаковывает обратно в чистый
+ * стандартный DEFLATE-архив. Это автоматически воспроизводит ручной приём
+ * «запаковать в zip и распаковать», лечащий отчёты Wildberries.
+ *
+ * Всё выполняется в памяти браузера — файл никуда не отправляется.
+ */
+function normalizeXlsxZip(bytes: Uint8Array): Uint8Array | null {
+  // .xlsx всегда начинается с сигнатуры ZIP "PK".
+  if (bytes.length < 2 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) return null;
+  try {
+    const entries = unzipSync(bytes);
+    return zipSync(entries, { level: 6 });
+  } catch {
+    return null;
   }
 }
 
@@ -96,17 +130,35 @@ export async function parseReportFile(file: File): Promise<ParsedReport> {
     );
   }
 
-  const buffer = await file.arrayBuffer();
-  const workbook = readWorkbook(buffer);
-  const { sheet, name: sheetName } = pickSheet(workbook);
+  const bytes = new Uint8Array(await file.arrayBuffer());
 
-  // Читаем как массив строк, чтобы аккуратно достать заголовки.
-  const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
-    header: 1,
-    raw: true,
-    defval: null,
-    blankrows: false,
-  });
+  // 1) Быстрый путь: читаем файл напрямую (обычные .xlsx).
+  let matrix: unknown[][] = [];
+  let sheetName = "";
+  const direct = tryReadWorkbook(bytes);
+  if (direct) {
+    try {
+      ({ matrix, sheetName } = workbookToMatrix(direct));
+    } catch {
+      matrix = [];
+    }
+  }
+
+  // 2) Фолбэк: если данных нет, нормализуем ZIP-контейнер и пробуем снова.
+  //    Лечит отчёты WB с нестандартной упаковкой без ручного zip/extract.
+  if (matrix.length < 2) {
+    const normalized = normalizeXlsxZip(bytes);
+    if (normalized) {
+      const wb = tryReadWorkbook(normalized);
+      if (wb) {
+        try {
+          ({ matrix, sheetName } = workbookToMatrix(wb));
+        } catch {
+          /* оставляем matrix как есть -> ниже выдадим понятную ошибку */
+        }
+      }
+    }
+  }
 
   if (matrix.length < 2) {
     throw new ReportParseError(
