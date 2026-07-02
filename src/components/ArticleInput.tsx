@@ -9,9 +9,13 @@ import {
   RefreshCw,
   CheckCircle2,
   AlertCircle,
+  ExternalLink,
 } from "lucide-react";
 import { ArticleSource, StatusKind } from "@/lib/types";
-import { GOOGLE_SHEET_SOURCE_LABEL } from "@/lib/googleSheet";
+import {
+  GOOGLE_SHEET_SOURCE_LABEL,
+  googleSheetViewUrl,
+} from "@/lib/googleSheet";
 
 interface ArticleInputProps {
   source: ArticleSource;
@@ -129,6 +133,16 @@ export function ArticleInput({
           <p className="text-sm font-medium text-brand-800">
             {GOOGLE_SHEET_SOURCE_LABEL}
           </p>
+
+          <a
+            href={googleSheetViewUrl()}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-brand-600 underline underline-offset-2 transition hover:text-brand-700"
+          >
+            <ExternalLink className="h-4 w-4" />
+            Открыть таблицу Google Sheets
+          </a>
 
           <button
             type="button"

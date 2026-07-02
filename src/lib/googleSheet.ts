@@ -20,5 +20,11 @@ export function googleSheetCsvUrl(): string {
   return `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${gid}`;
 }
 
+/** Ссылка на саму таблицу для открытия человеком (нужный лист по gid). */
+export function googleSheetViewUrl(): string {
+  const { spreadsheetId, gid } = GOOGLE_SHEET;
+  return `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit?gid=${gid}#gid=${gid}`;
+}
+
 /** Подпись источника для интерфейса. */
 export const GOOGLE_SHEET_SOURCE_LABEL = `Источник: Google Sheets → ${GOOGLE_SHEET.sheetName} → ${GOOGLE_SHEET.columnName}`;
