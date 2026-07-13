@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Фильтр отчетов Wildberries",
   description:
-    "Загрузите отчет WB и список артикулов, чтобы получить отфильтрованный Excel-файл.",
+    "Загрузите отчет WB и список баркодов, чтобы получить отфильтрованный Excel-файл.",
 };
 
 export default function RootLayout({

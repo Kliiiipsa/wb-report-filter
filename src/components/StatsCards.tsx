@@ -28,13 +28,13 @@ export function StatsCards({ stats }: StatsCardsProps) {
       accent: "text-slate-600 bg-slate-100",
     },
     {
-      label: "Уникальных артикулов в отчетах",
+      label: "Уникальных баркодов в отчетах",
       value: stats.uniqueArticlesInReports,
       icon: <Fingerprint className="h-5 w-5" />,
       accent: "text-indigo-600 bg-indigo-50",
     },
     {
-      label: "Артикулов указано",
+      label: "Баркодов указано",
       value: stats.userArticlesCount,
       icon: <ListChecks className="h-5 w-5" />,
       accent: "text-sky-600 bg-sky-50",
@@ -46,7 +46,7 @@ export function StatsCards({ stats }: StatsCardsProps) {
       accent: "text-emerald-600 bg-emerald-50",
     },
     {
-      label: "Артикулов не найдено",
+      label: "Баркодов не найдено",
       value: stats.notFoundArticlesCount,
       icon: <SearchX className="h-5 w-5" />,
       accent: "text-red-600 bg-red-50",

@@ -1,7 +1,7 @@
 import * as XLSX from "xlsx";
 import {
+  BARCODE_HEADER,
   EXCEL_ROW_LIMIT,
-  NMID_HEADER,
   ProcessingResult,
   ResultRow,
 } from "@/lib/types";
@@ -35,19 +35,19 @@ function buildSummarySheet(result: ProcessingResult): XLSX.WorkSheet {
     ["Показатель", "Значение"],
     ["Загружено отчетов", s.reportsCount],
     ["Всего строк в отчетах", s.totalRowsInReports],
-    ["Уникальных артикулов в отчетах", s.uniqueArticlesInReports],
-    ["Артикулов указано пользователем", s.userArticlesCount],
+    ["Уникальных баркодов в отчетах", s.uniqueArticlesInReports],
+    ["Баркодов указано пользователем", s.userArticlesCount],
     ["Найдено совпадений (строк)", s.matchedRowsCount],
-    ["Артикулов не найдено", s.notFoundArticlesCount],
+    ["Баркодов не найдено", s.notFoundArticlesCount],
   ];
   const sheet = XLSX.utils.aoa_to_sheet(data);
   sheet["!cols"] = [{ wch: 36 }, { wch: 16 }];
   return sheet;
 }
 
-/** Лист «Не найдено» — артикулы из списка пользователя, которых нет в отчетах. */
+/** Лист «Не найдено» — баркоды из списка пользователя, которых нет в отчетах. */
 function buildNotFoundSheet(notFound: string[]): XLSX.WorkSheet {
-  const data: string[][] = [[NMID_HEADER], ...notFound.map((a) => [a])];
+  const data: string[][] = [[BARCODE_HEADER], ...notFound.map((a) => [a])];
   const sheet = XLSX.utils.aoa_to_sheet(data);
   sheet["!cols"] = [{ wch: 24 }];
   return sheet;

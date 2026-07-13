@@ -41,7 +41,7 @@ const TABS: { id: ArticleSource; label: string; icon: React.ReactNode }[] = [
   { id: "demo", label: "Демо-список", icon: <Sparkles className="h-4 w-4" /> },
 ];
 
-/** Ввод списка артикулов: вручную / из файла / демо (заглушка Google Sheets). */
+/** Ввод списка баркодов: вручную / из файла / Google Sheets / демо. */
 export function ArticleInput({
   source,
   onSourceChange,
@@ -91,11 +91,11 @@ export function ArticleInput({
             value={manualText}
             onChange={(e) => onManualTextChange(e.target.value)}
             rows={6}
-            placeholder={"Введите артикулы, по одному в строке:\n123456789\n987654321"}
+            placeholder={"Введите баркоды, по одному в строке:\n4603805684169\n2000000000015"}
             className="w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-200"
           />
           <p className="mt-1 text-xs text-slate-500">
-            По одному артикулу в строке. Пробелы и дубли убираются автоматически.
+            По одному баркоду в строке. Пробелы и дубли убираются автоматически.
           </p>
         </div>
       )}
@@ -164,16 +164,16 @@ export function ArticleInput({
             <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
-                Артикулы загружены из Google Sheets.
+                Баркоды загружены из Google Sheets.
                 <br />
                 Получено:{" "}
                 <span className="font-semibold">
                   {googleCount.toLocaleString("ru-RU")}
                 </span>{" "}
-                уникальных артикулов.
+                уникальных баркодов.
                 {googleUsedFallback && (
                   <span className="mt-1 block text-xs text-emerald-600/80">
-                    Заголовок «Артикул WB» не найден — использована колонка D.
+                    Заголовок «Баркод» не найден — использована колонка E.
                   </span>
                 )}
               </span>
@@ -193,14 +193,14 @@ export function ArticleInput({
         <div className="rounded-lg border border-brand-200 bg-brand-50/60 p-4 text-sm text-brand-800">
           <p className="font-medium">Используется демо-список ({demoCount} шт.)</p>
           <p className="mt-1 text-brand-700/80">
-            Заглушка вместо Google Sheets. Позже здесь будет загрузка артикулов
-            из листа «Worksheet», колонка D.
+            Демонстрационные баркоды для проверки. Основной источник — Google
+            Sheets, лист «Асортимент для Миюми», колонка «Баркод».
           </p>
         </div>
       )}
 
       <p className="text-xs text-slate-500">
-        Распознано артикулов:{" "}
+        Распознано баркодов:{" "}
         <span className="font-semibold text-slate-700">{resolvedCount}</span>
       </p>
     </div>

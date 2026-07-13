@@ -1,7 +1,8 @@
 import * as XLSX from "xlsx";
 import {
+  BARCODE_HEADER,
+  BARCODE_REPORT_COL_INDEX,
   MAX_FILE_SIZE,
-  NMID_HEADER,
   ParsedReport,
   ReportRow,
 } from "@/lib/types";
@@ -84,12 +85,12 @@ function extractBestSheet(
 }
 
 /**
- * Определяет столбец "Код номенклатуры".
+ * Определяет столбец "Баркод" в отчёте WB.
  * 1) В приоритете — поиск по названию заголовка.
- * 2) Если не найдено — пробуем колонку D (4-й столбец).
+ * 2) Если не найдено — пробуем колонку I (9-й столбец, индекс 8).
  */
-function detectNmIdColumn(headers: string[]): string {
-  const target = NMID_HEADER.trim().toLowerCase();
+function detectBarcodeColumn(headers: string[]): string {
+  const target = BARCODE_HEADER.trim().toLowerCase();
 
   // 1. Точное совпадение по заголовку.
   const exact = headers.find((h) => h.trim().toLowerCase() === target);
@@ -97,17 +98,17 @@ function detectNmIdColumn(headers: string[]): string {
 
   // 1b. Частичное совпадение (на случай лишних символов в заголовке).
   const partial = headers.find((h) =>
-    h.trim().toLowerCase().includes("код номенклатуры")
+    h.trim().toLowerCase().includes(target)
   );
   if (partial) return partial;
 
-  // 2. Колонка D — четвертый столбец (индекс 3).
-  if (headers.length >= 4 && headers[3]) {
-    return headers[3];
+  // 2. Колонка I — девятый столбец (индекс 8).
+  if (headers.length > BARCODE_REPORT_COL_INDEX && headers[BARCODE_REPORT_COL_INDEX]) {
+    return headers[BARCODE_REPORT_COL_INDEX];
   }
 
   throw new ReportParseError(
-    `Не найден столбец «${NMID_HEADER}» и отсутствует колонка D для подстановки.`
+    `Не найден столбец «${BARCODE_HEADER}» и отсутствует колонка I для подстановки.`
   );
 }
 
@@ -173,7 +174,7 @@ export async function parseReportFile(file: File): Promise<ParsedReport> {
       : String(h).trim()
   );
 
-  const nmIdColumn = detectNmIdColumn(headers);
+  const barcodeColumn = detectBarcodeColumn(headers);
 
   const rows: ReportRow[] = [];
   for (let r = 1; r < matrix.length; r++) {
@@ -187,5 +188,5 @@ export async function parseReportFile(file: File): Promise<ParsedReport> {
     rows.push(row);
   }
 
-  return { fileName: file.name, sheetName, rows, headers, nmIdColumn };
+  return { fileName: file.name, sheetName, rows, headers, barcodeColumn };
 }

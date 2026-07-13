@@ -16,8 +16,8 @@ export const revalidate = 0;
  * GET /api/articles/google-sheet
  *
  * Загружает CSV-экспорт листа Google Sheets (по gid), находит колонку
- * «Артикул WB» по заголовку (fallback — колонка D), очищает значения и
- * возвращает уникальный список артикулов.
+ * «Баркод» по заголовку (fallback — колонка E), очищает значения и
+ * возвращает уникальный список баркодов.
  */
 export async function GET() {
   const url = googleSheetCsvUrl();
@@ -84,16 +84,20 @@ export async function GET() {
     );
   }
 
-  // 3. Определяем индекс колонки.
+  // 3. Определяем индекс колонки «Баркод».
   const headerRow = (matrix[0] ?? []).map((h) => normalizeArticle(h));
   const target = GOOGLE_SHEET.columnName.trim().toLowerCase();
 
   let colIndex = headerRow.findIndex((h) => h.toLowerCase() === target);
+  // Частичное совпадение (на случай лишних символов в заголовке).
+  if (colIndex === -1) {
+    colIndex = headerRow.findIndex((h) => h.toLowerCase().includes(target));
+  }
   let usedFallback = false;
 
   if (colIndex === -1) {
-    // 4. Fallback — колонка D (индекс 3).
-    colIndex = 3;
+    // 4. Fallback — колонка E (индекс 4).
+    colIndex = GOOGLE_SHEET.fallbackColIndex;
     usedFallback = true;
   }
 
@@ -111,7 +115,7 @@ export async function GET() {
     return NextResponse.json(
       {
         error:
-          "В колонке артикулов нет данных. Проверьте лист и колонку «Артикул WB».",
+          "В колонке баркодов нет данных. Проверьте лист и колонку «Баркод».",
       },
       { status: 422 }
     );

@@ -66,7 +66,7 @@ export default function Home() {
       setGoogleError(
         e instanceof Error
           ? e.message
-          : "Не удалось загрузить артикулы из Google Sheets."
+          : "Не удалось загрузить баркоды из Google Sheets."
       );
     }
   }
@@ -82,7 +82,7 @@ export default function Home() {
       setError(
         e instanceof ReportParseError
           ? e.message
-          : "Не удалось прочитать файл со списком артикулов."
+          : "Не удалось прочитать файл со списком баркодов."
       );
     }
   }
@@ -98,7 +98,7 @@ export default function Home() {
     }
     if (resolvedArticles.length === 0) {
       setError(
-        "Список артикулов пуст. Введите артикулы, загрузите файл или выберите демо-список."
+        "Список баркодов пуст. Введите баркоды, загрузите файл или выберите демо-список."
       );
       return;
     }
@@ -115,7 +115,7 @@ export default function Home() {
       if (processed.stats.matchedRowsCount === 0) {
         setStatus("error");
         setError(
-          "Совпадений не найдено: ни один артикул из списка не встретился в отчетах."
+          "Совпадений не найдено: ни один баркод из списка не встретился в отчетах."
         );
         setResult(processed); // показываем статистику даже при 0 совпадений
         return;
@@ -147,7 +147,7 @@ export default function Home() {
           Фильтр отчетов Wildberries
         </h1>
         <p className="mt-2 max-w-2xl text-slate-600">
-          Загрузите отчет WB и список артикулов, чтобы получить отфильтрованный
+          Загрузите отчет WB и список баркодов, чтобы получить отфильтрованный
           Excel-файл.
         </p>
       </header>
@@ -166,10 +166,10 @@ export default function Home() {
           <FileDropzone files={files} onChange={setFiles} />
         </section>
 
-        {/* Блок 2 — артикулы */}
+        {/* Блок 2 — баркоды */}
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-soft">
           <h2 className="mb-4 text-lg font-semibold text-slate-900">
-            2. Список артикулов
+            2. Список баркодов
           </h2>
           <ArticleInput
             source={source}
@@ -263,9 +263,9 @@ export default function Home() {
 
       {/* Подвал */}
       <footer className="mt-12 border-t border-slate-200 pt-6 text-xs text-slate-400">
-        Прототип. Файлы обрабатываются локально в браузере и не сохраняются на
-        сервере. Список артикулов из Google Sheets подключается позже вместо
-        демо-заглушки.
+        Файлы обрабатываются локально в браузере и не сохраняются на сервере.
+        Список баркодов берётся из Google Sheets (лист «Асортимент для Миюми»,
+        колонка «Баркод»).
       </footer>
     </main>
   );

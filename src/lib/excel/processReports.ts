@@ -42,7 +42,7 @@ export function processReports(
   for (const report of reports) {
     for (const row of report.rows) {
       totalRowsInReports++;
-      const nm = normalizeArticle(row[report.nmIdColumn]);
+      const nm = normalizeArticle(row[report.barcodeColumn]);
       if (nm) uniqueArticlesInReports.add(nm);
 
       if (nm && articleSet.has(nm)) {
