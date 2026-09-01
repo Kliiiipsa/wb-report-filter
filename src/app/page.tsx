@@ -1,7 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Download, PlayCircle, AlertTriangle, Info } from "lucide-react";
+import {
+  Download,
+  PlayCircle,
+  AlertTriangle,
+  Info,
+  Upload,
+  Store,
+  RefreshCw,
+  CheckCircle2,
+} from "lucide-react";
 import { FileDropzone } from "@/components/FileDropzone";
 import { ArticleInput } from "@/components/ArticleInput";
 import { StatsCards } from "@/components/StatsCards";
@@ -9,6 +18,7 @@ import { PreviewTable } from "@/components/PreviewTable";
 import { Badge } from "@/components/Badge";
 import {
   ArticleSource,
+  ParsedReport,
   ProcessingResult,
   StatusKind,
 } from "@/lib/types";
@@ -23,9 +33,17 @@ import {
 import { processReports } from "@/lib/excel/processReports";
 import { exportResultToExcel } from "@/lib/excel/exportResult";
 
+type ReportSource = "file" | "miyoumi";
+
 export default function Home() {
   // --- Отчеты ---
+  const [reportSource, setReportSource] = useState<ReportSource>("file");
   const [files, setFiles] = useState<File[]>([]);
+
+  // --- Кабинет Miyoumi (TrueStats) ---
+  const [miyoumiReport, setMiyoumiReport] = useState<ParsedReport | null>(null);
+  const [miyoumiStatus, setMiyoumiStatus] = useState<StatusKind>("idle");
+  const [miyoumiError, setMiyoumiError] = useState<string | null>(null);
 
   // --- Артикулы ---
   const [source, setSource] = useState<ArticleSource>("manual");
@@ -87,13 +105,47 @@ export default function Home() {
     }
   }
 
+  async function handleLoadMiyoumi() {
+    setMiyoumiError(null);
+    setMiyoumiStatus("loading");
+    try {
+      const res = await fetch("/api/report/miyoumi", { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error ?? "Не удалось загрузить отчёт Miyoumi.");
+      }
+      const report: ParsedReport = {
+        fileName: "TrueStats · Miyoumi",
+        sheetName: data.sheetName,
+        rows: data.rows,
+        headers: data.headers,
+        barcodeColumn: "Баркод",
+      };
+      setMiyoumiReport(report);
+      setMiyoumiStatus("ready");
+    } catch (e) {
+      setMiyoumiReport(null);
+      setMiyoumiStatus("error");
+      setMiyoumiError(
+        e instanceof Error ? e.message : "Не удалось загрузить отчёт Miyoumi."
+      );
+    }
+  }
+
   async function handleProcess() {
     setError(null);
     setResult(null);
 
+    const hasFileReports = reportSource === "file" && files.length > 0;
+    const hasMiyoumi = reportSource === "miyoumi" && miyoumiReport !== null;
+
     // Валидация ввода.
-    if (files.length === 0) {
-      setError("Не выбран ни один отчет. Загрузите хотя бы один файл .xlsx.");
+    if (!hasFileReports && !hasMiyoumi) {
+      setError(
+        reportSource === "miyoumi"
+          ? "Отчёт Miyoumi не загружен. Нажмите «Загрузить отчёт Miyoumi»."
+          : "Не выбран ни один отчет. Загрузите хотя бы один файл .xlsx."
+      );
       return;
     }
     if (resolvedArticles.length === 0) {
@@ -105,9 +157,13 @@ export default function Home() {
 
     setStatus("loading");
     try {
-      const reports = [];
-      for (const file of files) {
-        reports.push(await parseReportFile(file));
+      const reports: ParsedReport[] = [];
+      if (reportSource === "file") {
+        for (const file of files) {
+          reports.push(await parseReportFile(file));
+        }
+      } else if (miyoumiReport) {
+        reports.push(miyoumiReport);
       }
 
       const processed = processReports(reports, resolvedArticles);
@@ -137,7 +193,9 @@ export default function Home() {
     if (result) exportResultToExcel(result);
   }
 
-  const canProcess = files.length > 0 && resolvedArticles.length > 0;
+  const hasReport =
+    reportSource === "file" ? files.length > 0 : miyoumiReport !== null;
+  const canProcess = hasReport && resolvedArticles.length > 0;
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
@@ -157,13 +215,88 @@ export default function Home() {
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-soft">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-slate-900">
-              1. Отчеты Wildberries
+              1. Источник отчёта
             </h2>
-            {files.length > 0 && (
+            {reportSource === "file" && files.length > 0 && (
               <Badge kind="uploaded" label={`Файлов: ${files.length}`} />
             )}
+            {reportSource === "miyoumi" && miyoumiReport && (
+              <Badge kind="uploaded" label="Miyoumi загружен" />
+            )}
           </div>
-          <FileDropzone files={files} onChange={setFiles} />
+
+          {/* Выбор источника */}
+          <div className="mb-4 inline-flex rounded-lg bg-slate-100 p-1">
+            {(
+              [
+                { id: "file", label: "Файл WB", icon: <Upload className="h-4 w-4" /> },
+                { id: "miyoumi", label: "Miyoumi (TrueStats)", icon: <Store className="h-4 w-4" /> },
+              ] as { id: ReportSource; label: string; icon: React.ReactNode }[]
+            ).map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setReportSource(tab.id)}
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                  reportSource === tab.id
+                    ? "bg-white text-brand-700 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                {tab.icon}
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {reportSource === "file" && (
+            <FileDropzone files={files} onChange={setFiles} />
+          )}
+
+          {reportSource === "miyoumi" && (
+            <div className="space-y-3 rounded-lg border border-brand-200 bg-brand-50/40 p-4">
+              <p className="text-sm text-brand-800">
+                Отчёт кабинета <span className="font-semibold">Miyoumi</span>{" "}
+                собирается напрямую из TrueStats за весь период. Загрузка Excel не
+                нужна.
+              </p>
+              <button
+                type="button"
+                onClick={handleLoadMiyoumi}
+                disabled={miyoumiStatus === "loading"}
+                className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={`h-4 w-4 ${miyoumiStatus === "loading" ? "animate-spin" : ""}`}
+                />
+                {miyoumiStatus === "loading"
+                  ? "Собираю отчёт… (до ~15 сек)"
+                  : miyoumiStatus === "ready"
+                    ? "Обновить отчёт Miyoumi"
+                    : "Загрузить отчёт Miyoumi"}
+              </button>
+
+              {miyoumiStatus === "ready" && miyoumiReport && (
+                <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    Отчёт Miyoumi загружен:{" "}
+                    <span className="font-semibold">
+                      {miyoumiReport.rows.length.toLocaleString("ru-RU")}
+                    </span>{" "}
+                    строк по баркодам.
+                  </span>
+                </div>
+              )}
+
+              {miyoumiStatus === "error" && miyoumiError && (
+                <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{miyoumiError}</span>
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Блок 2 — баркоды */}
