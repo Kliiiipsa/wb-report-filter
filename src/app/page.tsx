@@ -40,6 +40,15 @@ type ReportSource = "file" | "miyoumi" | "wb-api";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Пауза между запросами к WB. Формально лимит — 1 запрос/мин, но на практике
+ * после тяжёлой страницы (100k строк) WB отдаёт 429 и через 65 сек, поэтому
+ * берём запас и увеличиваем паузу при повторных отказах.
+ */
+const WB_WAIT_BASE_MS = 75000;
+const wbWaitMs = (retries: number) =>
+  Math.min(WB_WAIT_BASE_MS + retries * 15000, 150000);
+
 export default function Home() {
   // --- Отчеты ---
   const [reportSource, setReportSource] = useState<ReportSource>("file");
@@ -225,20 +234,25 @@ export default function Home() {
         } catch {
           // Обрыв сети / таймаут — повторяем ту же страницу после паузы.
           if (++retries > 3) throw new Error("Не удалось связаться с сервером. Попробуйте позже.");
-          setWbProgress(`Сбой соединения, повторяю страницу ${page} через 60 сек…`);
-          await sleep(61000);
+          const w = wbWaitMs(retries);
+          setWbProgress(
+            `Сбой соединения, повторяю страницу ${page} через ${Math.round(w / 1000)} сек…`
+          );
+          await sleep(w);
           page--;
           continue;
         }
         const data = await res.json().catch(() => null);
         if (res.status === 429 || res.status === 504) {
           if (++retries > 5) throw new Error("WB не отвечает / держит лимит слишком долго. Попробуйте позже.");
+          const w = wbWaitMs(retries);
           setWbProgress(
-            res.status === 429
-              ? `Лимит WB (1 запрос/мин) — жду 60 сек и повторяю страницу ${page}…`
-              : `WB отдаёт страницу слишком долго — повторяю страницу ${page} через 60 сек…`
+            (res.status === 429
+              ? `Лимит WB — жду ${Math.round(w / 1000)} сек и повторяю страницу ${page}`
+              : `WB отдаёт страницу слишком долго — повторяю страницу ${page} через ${Math.round(w / 1000)} сек`) +
+              "… (это нормально, не закрывайте вкладку)"
           );
-          await sleep(61000);
+          await sleep(w);
           page--;
           continue;
         }
@@ -252,9 +266,11 @@ export default function Home() {
         setWbProgress(
           `Страница ${page} получена: строк в отчёте ${totalRows.toLocaleString("ru-RU")}, ` +
             `совпадений ${matched.length.toLocaleString("ru-RU")}` +
-            (done ? " · собираю результат…" : " · пауза 60 сек (лимит WB), затем следующая страница…")
+            (done
+              ? " · собираю результат…"
+              : ` · пауза ${WB_WAIT_BASE_MS / 1000} сек (лимит WB), затем следующая страница…`)
         );
-        if (!done) await sleep(61000);
+        if (!done) await sleep(WB_WAIT_BASE_MS);
       }
 
       const parsed: ParsedReport = {
