@@ -10,6 +10,7 @@ import {
   Store,
   RefreshCw,
   CheckCircle2,
+  CalendarRange,
 } from "lucide-react";
 import { FileDropzone } from "@/components/FileDropzone";
 import { ArticleInput } from "@/components/ArticleInput";
@@ -20,6 +21,7 @@ import {
   ArticleSource,
   ParsedReport,
   ProcessingResult,
+  ReportRow,
   StatusKind,
 } from "@/lib/types";
 import { parseReportFile, ReportParseError } from "@/lib/excel/parseReports";
@@ -32,8 +34,11 @@ import {
 } from "@/lib/excel/parseArticles";
 import { processReports } from "@/lib/excel/processReports";
 import { exportResultToExcel } from "@/lib/excel/exportResult";
+import { WB_COLUMNS, WB_BARCODE_COLUMN } from "@/lib/wbReport";
 
-type ReportSource = "file" | "miyoumi";
+type ReportSource = "file" | "miyoumi" | "wb-api";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export default function Home() {
   // --- Отчеты ---
@@ -68,6 +73,20 @@ export default function Home() {
       from.toISOString().slice(0, 10),
       to.toISOString().slice(0, 10)
     );
+  }
+
+  // --- Кабинет WB (по API, детальный отчёт) ---
+  const [wbFrom, setWbFrom] = useState("");
+  const [wbTo, setWbTo] = useState("");
+  const [wbProgress, setWbProgress] = useState("");
+  function setWbWeek(offsetWeeks: number) {
+    // offsetWeeks: 0 = последние 7 дней, 1 = предыдущая неделя
+    const to = new Date();
+    to.setDate(to.getDate() - offsetWeeks * 7);
+    const from = new Date(to);
+    from.setDate(from.getDate() - 6);
+    setWbFrom(from.toISOString().slice(0, 10));
+    setWbTo(to.toISOString().slice(0, 10));
   }
 
   // --- Артикулы ---
@@ -164,7 +183,93 @@ export default function Home() {
     }
   }
 
+  async function processWbApi() {
+    if (resolvedArticles.length === 0) {
+      setError("Сначала укажите баркоды в блоке 2 (например, из Google Sheets).");
+      return;
+    }
+    if (!wbFrom || !wbTo) {
+      setError("Выберите неделю (даты «с» и «по»).");
+      return;
+    }
+    setError(null);
+    setResult(null);
+    setStatus("loading");
+    setWbProgress("Запрашиваю WB…");
+    try {
+      const matched: ReportRow[] = [];
+      const barcodeSet = new Set<string>();
+      let rrdid = 0;
+      let done = false;
+      let totalRows = 0;
+      let page = 0;
+      while (!done) {
+        page++;
+        setWbProgress(`Страница ${page}: запрашиваю WB…`);
+        const res = await fetch("/api/report/wb", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            dateFrom: wbFrom,
+            dateTo: wbTo,
+            rrdid,
+            barcodes: resolvedArticles,
+          }),
+        });
+        const data = await res.json().catch(() => null);
+        if (res.status === 429) {
+          setWbProgress("Лимит WB (1 запрос/мин) — жду 60 сек…");
+          await sleep(61000);
+          page--;
+          continue;
+        }
+        if (!res.ok) throw new Error(data?.error ?? "Ошибка WB API.");
+        matched.push(...(data.matched ?? []));
+        totalRows += data.pageRowCount ?? 0;
+        for (const b of data.pageBarcodes ?? []) barcodeSet.add(b);
+        rrdid = data.lastRrdId ?? rrdid;
+        done = !!data.done;
+        setWbProgress(
+          `Страница ${page}: всего строк ${totalRows.toLocaleString("ru-RU")}, ` +
+            `совпадений ${matched.length.toLocaleString("ru-RU")}` +
+            (done ? "" : " · жду лимит WB 60 сек…")
+        );
+        if (!done) await sleep(61000);
+      }
+
+      const parsed: ParsedReport = {
+        fileName: `WB API · ${wbFrom}…${wbTo}`,
+        sheetName: "WB отчёт",
+        rows: matched,
+        headers: WB_COLUMNS,
+        barcodeColumn: WB_BARCODE_COLUMN,
+      };
+      const processed = processReports([parsed], resolvedArticles);
+      // Патчим агрегаты по данным сервера (всего строк / уникальных баркодов в отчёте).
+      processed.stats.totalRowsInReports = totalRows;
+      processed.stats.uniqueArticlesInReports = barcodeSet.size;
+
+      setWbProgress("");
+      if (processed.stats.matchedRowsCount === 0) {
+        setStatus("error");
+        setError("Совпадений не найдено: ни один баркод из списка не встретился за выбранную неделю.");
+        setResult(processed);
+        return;
+      }
+      setResult(processed);
+      setStatus("ready");
+    } catch (e) {
+      setStatus("error");
+      setWbProgress("");
+      setError(e instanceof Error ? e.message : "Ошибка WB API.");
+    }
+  }
+
   async function handleProcess() {
+    if (reportSource === "wb-api") {
+      await processWbApi();
+      return;
+    }
     setError(null);
     setResult(null);
 
@@ -226,7 +331,11 @@ export default function Home() {
   }
 
   const hasReport =
-    reportSource === "file" ? files.length > 0 : miyoumiReport !== null;
+    reportSource === "file"
+      ? files.length > 0
+      : reportSource === "miyoumi"
+        ? miyoumiReport !== null
+        : !!wbFrom && !!wbTo; // wb-api
   const canProcess = hasReport && resolvedArticles.length > 0;
 
   return (
@@ -255,6 +364,9 @@ export default function Home() {
             {reportSource === "miyoumi" && miyoumiReport && (
               <Badge kind="uploaded" label="Miyoumi загружен" />
             )}
+            {reportSource === "wb-api" && wbFrom && wbTo && (
+              <Badge kind="uploaded" label="Неделя выбрана" />
+            )}
           </div>
 
           {/* Выбор источника */}
@@ -262,6 +374,7 @@ export default function Home() {
             {(
               [
                 { id: "file", label: "Файл WB", icon: <Upload className="h-4 w-4" /> },
+                { id: "wb-api", label: "WB (по API)", icon: <CalendarRange className="h-4 w-4" /> },
                 { id: "miyoumi", label: "Miyoumi (TrueStats)", icon: <Store className="h-4 w-4" /> },
               ] as { id: ReportSource; label: string; icon: React.ReactNode }[]
             ).map((tab) => (
@@ -283,6 +396,72 @@ export default function Home() {
 
           {reportSource === "file" && (
             <FileDropzone files={files} onChange={setFiles} />
+          )}
+
+          {reportSource === "wb-api" && (
+            <div className="space-y-3 rounded-lg border border-brand-200 bg-brand-50/40 p-4">
+              <p className="text-sm text-brand-800">
+                Настоящий детальный WB-отчёт по API — со всеми колонками (Тип
+                документа, Обоснование для оплаты и т.д.). Из-за лимитов WB
+                тянется <span className="font-semibold">по одной неделе</span>.
+              </p>
+              <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  Сначала укажите баркоды в блоке 2 (фильтр применяется при
+                  загрузке). Затем выберите неделю и нажмите «Проверить данные».
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { label: "Последняя неделя", off: 0 },
+                  { label: "Прошлая неделя", off: 1 },
+                ].map((pr) => (
+                  <button
+                    key={pr.label}
+                    type="button"
+                    onClick={() => setWbWeek(pr.off)}
+                    className="rounded-md bg-white px-2.5 py-1 text-xs font-medium text-brand-700 ring-1 ring-inset ring-brand-200 transition hover:bg-brand-50"
+                  >
+                    {pr.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-xs text-brand-800">
+                  С
+                  <input
+                    type="date"
+                    value={wbFrom}
+                    max={wbTo || undefined}
+                    onChange={(e) => setWbFrom(e.target.value)}
+                    className="mt-1 block rounded-md border border-brand-200 bg-white px-2 py-1 text-sm text-slate-700 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-200"
+                  />
+                </label>
+                <label className="text-xs text-brand-800">
+                  По
+                  <input
+                    type="date"
+                    value={wbTo}
+                    min={wbFrom || undefined}
+                    onChange={(e) => setWbTo(e.target.value)}
+                    className="mt-1 block rounded-md border border-brand-200 bg-white px-2 py-1 text-sm text-slate-700 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-200"
+                  />
+                </label>
+                <span className="pb-1 text-xs text-brand-700/70">
+                  {wbFrom && wbTo ? `Неделя: ${wbFrom} … ${wbTo}` : "Период не выбран"}
+                </span>
+              </div>
+
+              {wbProgress && (
+                <div className="flex items-start gap-2 rounded-md border border-brand-200 bg-white px-3 py-2 text-sm text-brand-700">
+                  <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+                  <span>{wbProgress}</span>
+                </div>
+              )}
+            </div>
           )}
 
           {reportSource === "miyoumi" && (
