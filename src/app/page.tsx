@@ -44,6 +44,31 @@ export default function Home() {
   const [miyoumiReport, setMiyoumiReport] = useState<ParsedReport | null>(null);
   const [miyoumiStatus, setMiyoumiStatus] = useState<StatusKind>("idle");
   const [miyoumiError, setMiyoumiError] = useState<string | null>(null);
+  // Период: пустые строки = весь период.
+  const [miyoumiFrom, setMiyoumiFrom] = useState("");
+  const [miyoumiTo, setMiyoumiTo] = useState("");
+
+  // Сброс загруженного отчёта при смене периода (чтобы данные не устаревали).
+  function updateMiyoumiPeriod(from: string, to: string) {
+    setMiyoumiFrom(from);
+    setMiyoumiTo(to);
+    setMiyoumiReport(null);
+    setMiyoumiStatus("idle");
+    setMiyoumiError(null);
+  }
+  function setMiyoumiPreset(days: number | null) {
+    if (days === null) {
+      updateMiyoumiPeriod("", "");
+      return;
+    }
+    const to = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - days);
+    updateMiyoumiPeriod(
+      from.toISOString().slice(0, 10),
+      to.toISOString().slice(0, 10)
+    );
+  }
 
   // --- Артикулы ---
   const [source, setSource] = useState<ArticleSource>("manual");
@@ -109,7 +134,14 @@ export default function Home() {
     setMiyoumiError(null);
     setMiyoumiStatus("loading");
     try {
-      const res = await fetch("/api/report/miyoumi", { cache: "no-store" });
+      const params = new URLSearchParams();
+      if (miyoumiFrom) params.set("dateFrom", miyoumiFrom);
+      if (miyoumiTo) params.set("dateTo", miyoumiTo);
+      const qs = params.toString();
+      const res = await fetch(
+        `/api/report/miyoumi${qs ? "?" + qs : ""}`,
+        { cache: "no-store" }
+      );
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         throw new Error(data?.error ?? "Не удалось загрузить отчёт Miyoumi.");
@@ -257,9 +289,69 @@ export default function Home() {
             <div className="space-y-3 rounded-lg border border-brand-200 bg-brand-50/40 p-4">
               <p className="text-sm text-brand-800">
                 Отчёт кабинета <span className="font-semibold">Miyoumi</span>{" "}
-                собирается напрямую из TrueStats за весь период. Загрузка Excel не
-                нужна.
+                собирается напрямую из TrueStats за выбранный период. Загрузка
+                Excel не нужна.
               </p>
+
+              {/* Пресеты периода */}
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    { label: "Весь период", days: null },
+                    { label: "Последняя неделя", days: 7 },
+                    { label: "Последний месяц", days: 30 },
+                  ] as { label: string; days: number | null }[]
+                ).map((pr) => {
+                  const active =
+                    pr.days === null
+                      ? !miyoumiFrom && !miyoumiTo
+                      : false;
+                  return (
+                    <button
+                      key={pr.label}
+                      type="button"
+                      onClick={() => setMiyoumiPreset(pr.days)}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium ring-1 ring-inset transition ${
+                        active
+                          ? "bg-brand-600 text-white ring-brand-600"
+                          : "bg-white text-brand-700 ring-brand-200 hover:bg-brand-50"
+                      }`}
+                    >
+                      {pr.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Поля дат */}
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-xs text-brand-800">
+                  С
+                  <input
+                    type="date"
+                    value={miyoumiFrom}
+                    max={miyoumiTo || undefined}
+                    onChange={(e) => updateMiyoumiPeriod(e.target.value, miyoumiTo)}
+                    className="mt-1 block rounded-md border border-brand-200 bg-white px-2 py-1 text-sm text-slate-700 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-200"
+                  />
+                </label>
+                <label className="text-xs text-brand-800">
+                  По
+                  <input
+                    type="date"
+                    value={miyoumiTo}
+                    min={miyoumiFrom || undefined}
+                    onChange={(e) => updateMiyoumiPeriod(miyoumiFrom, e.target.value)}
+                    className="mt-1 block rounded-md border border-brand-200 bg-white px-2 py-1 text-sm text-slate-700 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-200"
+                  />
+                </label>
+                <span className="pb-1 text-xs text-brand-700/70">
+                  {miyoumiFrom || miyoumiTo
+                    ? `Период: ${miyoumiFrom || "начало"} … ${miyoumiTo || "сегодня"}`
+                    : "Период: весь"}
+                </span>
+              </div>
+
               <button
                 type="button"
                 onClick={handleLoadMiyoumi}
@@ -284,7 +376,11 @@ export default function Home() {
                     <span className="font-semibold">
                       {miyoumiReport.rows.length.toLocaleString("ru-RU")}
                     </span>{" "}
-                    строк по баркодам.
+                    строк по баркодам
+                    {miyoumiFrom || miyoumiTo
+                      ? ` за ${miyoumiFrom || "начало"} … ${miyoumiTo || "сегодня"}`
+                      : " за весь период"}
+                    .
                   </span>
                 </div>
               )}
