@@ -34,7 +34,12 @@ import {
 } from "@/lib/excel/parseArticles";
 import { processReports } from "@/lib/excel/processReports";
 import { exportResultToExcel } from "@/lib/excel/exportResult";
-import { WB_COLUMNS, WB_BARCODE_COLUMN, wbArrayToRow } from "@/lib/wbReport";
+import {
+  WB_COLUMNS,
+  WB_COMPACT_COLUMNS,
+  WB_BARCODE_COLUMN,
+  wbArrayToRow,
+} from "@/lib/wbReport";
 
 type ReportSource = "file" | "miyoumi" | "wb-api";
 
@@ -88,6 +93,8 @@ export default function Home() {
   const [wbFrom, setWbFrom] = useState("");
   const [wbTo, setWbTo] = useState("");
   const [wbProgress, setWbProgress] = useState("");
+  // true = только нужные колонки (легче файл), false = все колонки WB-отчёта
+  const [wbCompact, setWbCompact] = useState(true);
   function setWbWeek(offsetWeeks: number) {
     // offsetWeeks: 0 = последние 7 дней, 1 = предыдущая неделя
     const to = new Date();
@@ -211,6 +218,7 @@ export default function Home() {
     try {
       const matched: ReportRow[] = [];
       const barcodeSet = new Set<string>();
+      let columns: string[] = wbCompact ? WB_COMPACT_COLUMNS : WB_COLUMNS;
       let rrdid = 0;
       let done = false;
       let totalRows = 0;
@@ -229,6 +237,7 @@ export default function Home() {
               dateTo: wbTo,
               rrdid,
               barcodes: resolvedArticles,
+              compact: wbCompact,
             }),
           });
         } catch {
@@ -258,7 +267,8 @@ export default function Home() {
         }
         if (!res.ok) throw new Error(data?.error ?? "Ошибка WB API.");
         retries = 0;
-        for (const a of data.matched ?? []) matched.push(wbArrayToRow(a));
+        if (Array.isArray(data.columns) && data.columns.length) columns = data.columns;
+        for (const a of data.matched ?? []) matched.push(wbArrayToRow(a, columns));
         totalRows += data.pageRowCount ?? 0;
         for (const b of data.pageBarcodes ?? []) barcodeSet.add(b);
         rrdid = data.lastRrdId ?? rrdid;
@@ -277,7 +287,7 @@ export default function Home() {
         fileName: `WB API · ${wbFrom}…${wbTo}`,
         sheetName: "WB отчёт",
         rows: matched,
-        headers: WB_COLUMNS,
+        headers: columns,
         barcodeColumn: WB_BARCODE_COLUMN,
       };
       const processed = processReports([parsed], resolvedArticles);
@@ -490,6 +500,23 @@ export default function Home() {
                   {wbFrom && wbTo ? `Неделя: ${wbFrom} … ${wbTo}` : "Период не выбран"}
                 </span>
               </div>
+
+              <label className="flex items-start gap-2 rounded-md border border-brand-200 bg-white px-3 py-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={wbCompact}
+                  onChange={(e) => setWbCompact(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-brand-600"
+                />
+                <span>
+                  Только нужные колонки{" "}
+                  <span className="text-slate-500">
+                    ({WB_COMPACT_COLUMNS.length} вместо {WB_COLUMNS.length}) — файл
+                    заметно легче. Снимите галочку, если нужны все колонки
+                    WB-отчёта.
+                  </span>
+                </span>
+              </label>
 
               {wbProgress && (
                 <div className="flex items-start gap-2 rounded-md border border-brand-200 bg-white px-3 py-2 text-sm text-brand-700">

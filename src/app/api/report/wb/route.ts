@@ -32,6 +32,7 @@ export async function POST(request: Request) {
     dateTo?: string;
     rrdid?: number;
     barcodes?: string[];
+    compact?: boolean;
   };
   try {
     body = await request.json();
@@ -39,7 +40,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Некорректный запрос." }, { status: 400 });
   }
 
-  const { dateFrom, dateTo, rrdid = 0, barcodes = [] } = body;
+  const { dateFrom, dateTo, rrdid = 0, barcodes = [], compact = true } = body;
   if (!dateFrom || !dateTo) {
     return NextResponse.json(
       { error: "Не указан период (dateFrom/dateTo)." },
@@ -55,7 +56,14 @@ export async function POST(request: Request) {
 
   try {
     const barcodeSet = new Set(barcodes.map((b) => String(b).trim()));
-    const page = await fetchWbReportPage(token, dateFrom, dateTo, rrdid, barcodeSet);
+    const page = await fetchWbReportPage(
+      token,
+      dateFrom,
+      dateTo,
+      rrdid,
+      barcodeSet,
+      compact
+    );
     return NextResponse.json(page);
   } catch (e) {
     if (e instanceof WbReportError) {

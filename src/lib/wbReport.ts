@@ -91,6 +91,57 @@ const COLS: [string, string, boolean?][] = [
 /** Заголовки итоговой таблицы (в порядке WB-отчёта). */
 export const WB_COLUMNS = COLS.map((c) => c[0]);
 
+/**
+ * Компактный набор колонок: обязательные (из шаблона) + то, без чего отчёт
+ * не читается. Убраны тяжёлые служебные идентификаторы и дубли (srid,
+ * Стикер МГ, ИНН/название партнёра, банк-эквайер, номера офиса/декларации,
+ * служебные даты периода и т.п.) — итоговый Excel получается заметно легче.
+ */
+const COMPACT = new Set<string>([
+  "Предмет",
+  "Код номенклатуры",
+  "Бренд",
+  "Артикул поставщика",
+  "Название",
+  "Размер",
+  "Баркод",
+  "Тип документа",
+  "Обоснование для оплаты",
+  "Дата заказа покупателем",
+  "Дата продажи",
+  "Кол-во",
+  "Цена розничная",
+  "Вайлдберриз реализовал Товар (Пр)",
+  "Согласованная скидка, %",
+  "Размер кВВ, %",
+  "Вознаграждение Вайлдберриз (ВВ), без НДС",
+  "НДС с Вознаграждения Вайлдберриз",
+  "К перечислению Продавцу за реализованный Товар",
+  "Возмещение расходов по эквайрингу",
+  "Услуги по доставке товара покупателю",
+  "Общая сумма штрафов",
+  "Доплаты",
+  "Виды логистики, штрафов и доплат",
+  "Возмещение издержек по перевозке/по складским операциям",
+  "Хранение",
+  "Прочие удержания",
+  "Платная приёмка",
+  "Склад",
+]);
+
+/** Колонки для выбранного режима. */
+function colsFor(compact: boolean): [string, string, boolean?][] {
+  return compact ? COLS.filter((c) => COMPACT.has(c[0])) : COLS;
+}
+
+/** Список заголовков для выбранного режима. */
+export function wbColumns(compact: boolean): string[] {
+  return colsFor(compact).map((c) => c[0]);
+}
+
+/** Компактный набор заголовков (для UI). */
+export const WB_COMPACT_COLUMNS = wbColumns(true);
+
 const DATE_KEYS = new Set(COLS.filter((c) => c[2]).map((c) => c[1]));
 
 function cell(value: unknown, isDate: boolean): unknown {
@@ -109,23 +160,28 @@ export function mapWbRow(apiRow: Record<string, unknown>): ReportRow {
 }
 
 /**
- * Компактное представление строки: массив значений в порядке WB_COLUMNS.
+ * Компактное представление строки: массив значений в порядке колонок режима.
  * Без повторяющихся ключей ответ в 3–4 раза меньше — важно для недели
  * с десятками тысяч совпавших строк.
  */
-export function mapWbRowArray(apiRow: Record<string, unknown>): unknown[] {
-  return COLS.map(([, key]) => cell(apiRow[key], DATE_KEYS.has(key)));
+function mapRowArray(
+  apiRow: Record<string, unknown>,
+  cols: [string, string, boolean?][]
+): unknown[] {
+  return cols.map(([, key]) => cell(apiRow[key], DATE_KEYS.has(key)));
 }
 
 /** Восстанавливает объект-строку из компактного массива (для клиента). */
-export function wbArrayToRow(values: unknown[]): ReportRow {
+export function wbArrayToRow(values: unknown[], columns: string[]): ReportRow {
   const row: ReportRow = {};
-  for (let i = 0; i < WB_COLUMNS.length; i++) row[WB_COLUMNS[i]] = values[i] ?? null;
+  for (let i = 0; i < columns.length; i++) row[columns[i]] = values[i] ?? null;
   return row;
 }
 
 export interface WbPage {
-  /** Совпавшие строки этой страницы в компактном виде (массивы по порядку WB_COLUMNS). */
+  /** Заголовки колонок, в порядке которых собраны массивы `matched`. */
+  columns: string[];
+  /** Совпавшие строки этой страницы в компактном виде (массивы по порядку columns). */
   matched: unknown[][];
   /** Всего строк в странице (до фильтра). */
   pageRowCount: number;
@@ -146,8 +202,10 @@ export async function fetchWbReportPage(
   dateFrom: string,
   dateTo: string,
   rrdid: number,
-  barcodes: Set<string>
+  barcodes: Set<string>,
+  compact = true
 ): Promise<WbPage> {
+  const cols = colsFor(compact);
   const url =
     `${WB_STATS_BASE}${WB_REPORT_ENDPOINT}` +
     `?dateFrom=${encodeURIComponent(dateFrom)}&dateTo=${encodeURIComponent(dateTo)}` +
@@ -185,12 +243,13 @@ export async function fetchWbReportPage(
   for (const r of arr) {
     const bc = String(r.barcode ?? "").trim();
     if (bc) seen.add(bc);
-    if (bc && barcodes.has(bc)) matched.push(mapWbRowArray(r));
+    if (bc && barcodes.has(bc)) matched.push(mapRowArray(r, cols));
     const id = Number(r.rrd_id);
     if (!Number.isNaN(id)) lastRrdId = id;
   }
 
   return {
+    columns: cols.map((c) => c[0]),
     matched,
     pageRowCount: arr.length,
     pageBarcodes: [...seen],
