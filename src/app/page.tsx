@@ -34,7 +34,7 @@ import {
 } from "@/lib/excel/parseArticles";
 import { processReports } from "@/lib/excel/processReports";
 import { exportResultToExcel } from "@/lib/excel/exportResult";
-import { WB_COLUMNS, WB_BARCODE_COLUMN } from "@/lib/wbReport";
+import { WB_COLUMNS, WB_BARCODE_COLUMN, wbArrayToRow } from "@/lib/wbReport";
 
 type ReportSource = "file" | "miyoumi" | "wb-api";
 
@@ -195,7 +195,10 @@ export default function Home() {
     setError(null);
     setResult(null);
     setStatus("loading");
-    setWbProgress("Запрашиваю WB…");
+    setWbProgress(
+      "Запрашиваю WB… Неделя обычно = 2 страницы по 100 000 строк; между ними " +
+        "обязательная пауза 60 сек (лимит WB). Обычно занимает 2–3 минуты."
+    );
     try {
       const matched: ReportRow[] = [];
       const barcodeSet = new Set<string>();
@@ -203,36 +206,53 @@ export default function Home() {
       let done = false;
       let totalRows = 0;
       let page = 0;
+      let retries = 0;
       while (!done) {
         page++;
-        setWbProgress(`Страница ${page}: запрашиваю WB…`);
-        const res = await fetch("/api/report/wb", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            dateFrom: wbFrom,
-            dateTo: wbTo,
-            rrdid,
-            barcodes: resolvedArticles,
-          }),
-        });
+        setWbProgress(`Страница ${page}: запрашиваю WB (до ~1–2 мин на страницу)…`);
+        let res: Response;
+        try {
+          res = await fetch("/api/report/wb", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              dateFrom: wbFrom,
+              dateTo: wbTo,
+              rrdid,
+              barcodes: resolvedArticles,
+            }),
+          });
+        } catch {
+          // Обрыв сети / таймаут — повторяем ту же страницу после паузы.
+          if (++retries > 3) throw new Error("Не удалось связаться с сервером. Попробуйте позже.");
+          setWbProgress(`Сбой соединения, повторяю страницу ${page} через 60 сек…`);
+          await sleep(61000);
+          page--;
+          continue;
+        }
         const data = await res.json().catch(() => null);
-        if (res.status === 429) {
-          setWbProgress("Лимит WB (1 запрос/мин) — жду 60 сек…");
+        if (res.status === 429 || res.status === 504) {
+          if (++retries > 5) throw new Error("WB не отвечает / держит лимит слишком долго. Попробуйте позже.");
+          setWbProgress(
+            res.status === 429
+              ? `Лимит WB (1 запрос/мин) — жду 60 сек и повторяю страницу ${page}…`
+              : `WB отдаёт страницу слишком долго — повторяю страницу ${page} через 60 сек…`
+          );
           await sleep(61000);
           page--;
           continue;
         }
         if (!res.ok) throw new Error(data?.error ?? "Ошибка WB API.");
-        matched.push(...(data.matched ?? []));
+        retries = 0;
+        for (const a of data.matched ?? []) matched.push(wbArrayToRow(a));
         totalRows += data.pageRowCount ?? 0;
         for (const b of data.pageBarcodes ?? []) barcodeSet.add(b);
         rrdid = data.lastRrdId ?? rrdid;
         done = !!data.done;
         setWbProgress(
-          `Страница ${page}: всего строк ${totalRows.toLocaleString("ru-RU")}, ` +
+          `Страница ${page} получена: строк в отчёте ${totalRows.toLocaleString("ru-RU")}, ` +
             `совпадений ${matched.length.toLocaleString("ru-RU")}` +
-            (done ? "" : " · жду лимит WB 60 сек…")
+            (done ? " · собираю результат…" : " · пауза 60 сек (лимит WB), затем следующая страница…")
         );
         if (!done) await sleep(61000);
       }

@@ -3,7 +3,9 @@ import { fetchWbReportPage, WbReportError } from "@/lib/wbReport";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-export const maxDuration = 60;
+// Страница WB в 100k строк может отдаваться дольше минуты — даём функции запас
+// (Hobby + Fluid Compute допускает до 300 сек).
+export const maxDuration = 300;
 
 /**
  * POST /api/report/wb

@@ -108,9 +108,25 @@ export function mapWbRow(apiRow: Record<string, unknown>): ReportRow {
   return row;
 }
 
+/**
+ * Компактное представление строки: массив значений в порядке WB_COLUMNS.
+ * Без повторяющихся ключей ответ в 3–4 раза меньше — важно для недели
+ * с десятками тысяч совпавших строк.
+ */
+export function mapWbRowArray(apiRow: Record<string, unknown>): unknown[] {
+  return COLS.map(([, key]) => cell(apiRow[key], DATE_KEYS.has(key)));
+}
+
+/** Восстанавливает объект-строку из компактного массива (для клиента). */
+export function wbArrayToRow(values: unknown[]): ReportRow {
+  const row: ReportRow = {};
+  for (let i = 0; i < WB_COLUMNS.length; i++) row[WB_COLUMNS[i]] = values[i] ?? null;
+  return row;
+}
+
 export interface WbPage {
-  /** Отфильтрованные по баркодам строки этой страницы (с русскими заголовками). */
-  matched: ReportRow[];
+  /** Совпавшие строки этой страницы в компактном виде (массивы по порядку WB_COLUMNS). */
+  matched: unknown[][];
   /** Всего строк в странице (до фильтра). */
   pageRowCount: number;
   /** Уникальные баркоды, встреченные в этой странице (для статистики). */
@@ -163,13 +179,13 @@ export async function fetchWbReportPage(
   const data = (await res.json().catch(() => null)) as Record<string, unknown>[] | null;
   const arr = Array.isArray(data) ? data : [];
 
-  const matched: ReportRow[] = [];
+  const matched: unknown[][] = [];
   const seen = new Set<string>();
   let lastRrdId = rrdid;
   for (const r of arr) {
     const bc = String(r.barcode ?? "").trim();
     if (bc) seen.add(bc);
-    if (bc && barcodes.has(bc)) matched.push(mapWbRow(r));
+    if (bc && barcodes.has(bc)) matched.push(mapWbRowArray(r));
     const id = Number(r.rrd_id);
     if (!Number.isNaN(id)) lastRrdId = id;
   }
