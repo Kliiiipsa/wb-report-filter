@@ -62,6 +62,7 @@ export async function GET(request: Request) {
   let rrdid = 0;
   let pages = 0;
   let complete = false;
+  let throttled = 0;
 
   try {
     for (;;) {
@@ -69,7 +70,26 @@ export async function GET(request: Request) {
         log.push("бюджет времени исчерпан — остаток доберёт следующий запуск");
         break;
       }
-      const page = await loadPage(token, week.from, week.to, rrdid);
+      let page;
+      try {
+        page = await loadPage(token, week.from, week.to, rrdid);
+      } catch (e) {
+        // WB держит лимит: не сдаёмся (cron запускается раз в день), а ждём
+        // с нарастающей паузой, пока хватает бюджета времени.
+        if (e instanceof WbReportError && e.status === 429 && throttled < 3) {
+          throttled++;
+          const wait = 90_000 + (throttled - 1) * 30_000;
+          if (Date.now() - started + wait > TIME_BUDGET_MS) {
+            log.push("WB держит лимит, бюджет времени не позволяет ждать — повторю в следующий запуск");
+            break;
+          }
+          log.push(`WB 429 — жду ${wait / 1000} сек и повторяю rrdid=${rrdid}`);
+          await new Promise((r) => setTimeout(r, wait));
+          continue;
+        }
+        throw e;
+      }
+      throttled = 0;
       pages++;
       log.push(
         `rrdid=${rrdid}: ${page.pageRowCount} строк, ` +
