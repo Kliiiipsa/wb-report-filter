@@ -67,7 +67,10 @@ export async function POST(request: Request) {
     return NextResponse.json(page);
   } catch (e) {
     if (e instanceof WbReportError) {
-      return NextResponse.json({ error: e.message }, { status: e.status ?? 502 });
+      return NextResponse.json(
+        { error: e.message, retryAfterSec: e.retryAfterSec },
+        { status: e.status ?? 502 }
+      );
     }
     return NextResponse.json(
       { error: "Не удалось получить отчёт WB. Попробуйте позже." },

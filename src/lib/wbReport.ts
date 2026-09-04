@@ -25,11 +25,25 @@ export const WB_PAGE_LIMIT = 100000;
 
 export class WbReportError extends Error {
   status?: number;
-  constructor(message: string, status?: number) {
+  /** Сколько секунд WB просит подождать (из заголовка Retry-After), если сообщил. */
+  retryAfterSec?: number;
+  constructor(message: string, status?: number, retryAfterSec?: number) {
     super(message);
     this.name = "WbReportError";
     this.status = status;
+    this.retryAfterSec = retryAfterSec;
   }
+}
+
+/** Разбирает Retry-After (секунды или HTTP-дата) в секунды; undefined если нет/непонятно. */
+function parseRetryAfter(res: Response): number | undefined {
+  const raw = res.headers.get("retry-after");
+  if (!raw) return undefined;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= 0) return Math.ceil(n);
+  const t = Date.parse(raw);
+  if (!Number.isNaN(t)) return Math.max(0, Math.ceil((t - Date.now()) / 1000));
+  return undefined;
 }
 
 /** Преобразует строку API в строку с русскими заголовками (как в WB-отчёте). */
@@ -75,9 +89,13 @@ async function fetchFromWb(
   }
 
   if (res.status === 429) {
+    const retryAfter = parseRetryAfter(res);
     throw new WbReportError(
-      "WB ограничивает запросы (не чаще 1 в минуту). Подождите минуту.",
-      429
+      retryAfter !== undefined
+        ? `WB ограничивает запросы: просит подождать ${retryAfter} сек.`
+        : "WB ограничивает запросы (лимит на частоту). Подождите минуту.",
+      429,
+      retryAfter
     );
   }
   if (res.status === 401) {

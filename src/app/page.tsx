@@ -258,7 +258,11 @@ export default function Home() {
         // повторяем ту же страницу после паузы, а не роняем весь процесс.
         if (res.status === 429 || res.status === 504 || res.status === 502) {
           if (++retries > 5) throw new Error("WB не отвечает / держит лимит слишком долго. Попробуйте позже.");
-          const w = wbWaitMs(retries);
+          // Если WB сам сказал, сколько ждать (Retry-After) — ждём ровно столько
+          // (с запасом); иначе нашу нарастающую паузу. Раньше срока повторять
+          // бессмысленно: это только продлевает блокировку.
+          const ra = typeof data?.retryAfterSec === "number" ? data.retryAfterSec * 1000 + 2000 : 0;
+          const w = Math.max(ra, wbWaitMs(retries));
           const why =
             res.status === 429
               ? `Лимит WB — жду ${Math.round(w / 1000)} сек и повторяю страницу ${page}`

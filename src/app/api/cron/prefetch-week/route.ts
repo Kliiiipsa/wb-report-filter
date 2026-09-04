@@ -93,18 +93,28 @@ export async function GET(request: Request) {
           try {
             page = await loadPage(token, week.from, week.to, rrdid);
           } catch (e) {
-            // WB держит лимит: не сдаёмся (cron запускается раз в день), а ждём
-            // с нарастающей паузой, пока хватает бюджета времени.
-            if (e instanceof WbReportError && e.status === 429 && throttled < 3) {
-              throttled++;
-              const wait = 90_000 + (throttled - 1) * 30_000;
-              if (Date.now() - started + wait > TIME_BUDGET_MS) {
-                send({ log: "WB держит лимит, бюджет не позволяет ждать — повторю в следующий запуск" });
-                break;
+            // WB держит лимит. Слепые повторы каждые 1–2 минуты только продлевают
+            // блокировку (проверено), поэтому: повторяем ОДИН раз и только если WB
+            // сам сказал, сколько ждать (Retry-After) и это влезает в бюджет;
+            // иначе завершаем прогон — остаток доберёт следующий запуск.
+            if (e instanceof WbReportError && e.status === 429) {
+              const ra = e.retryAfterSec;
+              if (
+                throttled === 0 &&
+                ra !== undefined &&
+                Date.now() - started + ra * 1000 + 20_000 <= TIME_BUDGET_MS
+              ) {
+                throttled++;
+                send({ log: `WB 429, просит подождать ${ra} сек — жду и повторяю rrdid=${rrdid}` });
+                await new Promise((r) => setTimeout(r, ra * 1000 + 2_000));
+                continue;
               }
-              send({ log: `WB 429 — жду ${wait / 1000} сек и повторяю rrdid=${rrdid}` });
-              await new Promise((r) => setTimeout(r, wait));
-              continue;
+              send({
+                log:
+                  `WB 429 (${ra !== undefined ? `Retry-After ${ra} сек` : "без Retry-After"}) — ` +
+                  "прекращаю прогон, чтобы не продлевать блокировку; остаток доберёт следующий запуск",
+              });
+              break;
             }
             throw e;
           }
