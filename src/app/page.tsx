@@ -39,7 +39,7 @@ import {
   WB_COMPACT_COLUMNS,
   WB_BARCODE_COLUMN,
   wbArrayToRow,
-} from "@/lib/wbReport";
+} from "@/lib/wbColumns";
 
 type ReportSource = "file" | "miyoumi" | "wb-api";
 
@@ -273,14 +273,19 @@ export default function Home() {
         for (const b of data.pageBarcodes ?? []) barcodeSet.add(b);
         rrdid = data.lastRrdId ?? rrdid;
         done = !!data.done;
+        const fromCache = !!data.fromCache;
         setWbProgress(
-          `Страница ${page} получена: строк в отчёте ${totalRows.toLocaleString("ru-RU")}, ` +
+          `Страница ${page} ${fromCache ? "из кэша" : "получена от WB"}: ` +
+            `строк в отчёте ${totalRows.toLocaleString("ru-RU")}, ` +
             `совпадений ${matched.length.toLocaleString("ru-RU")}` +
             (done
               ? " · собираю результат…"
-              : ` · пауза ${WB_WAIT_BASE_MS / 1000} сек (лимит WB), затем следующая страница…`)
+              : fromCache
+                ? " · следующая страница…"
+                : ` · пауза ${WB_WAIT_BASE_MS / 1000} сек (лимит WB), затем следующая страница…`)
         );
-        if (!done) await sleep(WB_WAIT_BASE_MS);
+        // Пауза нужна только если мы реально ходили в WB: страницы из кэша лимит не тратят.
+        if (!done && !fromCache) await sleep(WB_WAIT_BASE_MS);
       }
 
       const parsed: ParsedReport = {

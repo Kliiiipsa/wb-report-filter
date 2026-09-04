@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/prefetch-week",
+      "schedule": "0 5 * * *"
+    }
+  ]
+}
