@@ -90,10 +90,14 @@ async function fetchFromWb(
 
   if (res.status === 429) {
     const retryAfter = parseRetryAfter(res);
+    // WB часто не шлёт Retry-After, но в теле ответа обычно называет окно
+    // лимита — сохраняем его в сообщении, чтобы не гадать по логам.
+    const bodyText = (await res.text().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 200);
+    const hint = bodyText ? ` WB: «${bodyText}»` : "";
     throw new WbReportError(
-      retryAfter !== undefined
+      (retryAfter !== undefined
         ? `WB ограничивает запросы: просит подождать ${retryAfter} сек.`
-        : "WB ограничивает запросы (лимит на частоту). Подождите минуту.",
+        : "WB ограничивает запросы (лимит на частоту).") + hint,
       429,
       retryAfter
     );
