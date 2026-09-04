@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/prefetch-week",
       "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/prefetch-week",
+      "schedule": "0 17 * * *"
     }
   ]
 }
