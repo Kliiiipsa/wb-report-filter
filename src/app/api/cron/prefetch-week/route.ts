@@ -9,6 +9,12 @@ export const maxDuration = 300;
 const WB_WAIT_MS = 75_000;
 /** Бюджет времени на один запуск; остаток недели доберёт следующий запуск. */
 const TIME_BUDGET_MS = 240_000;
+/**
+ * Heartbeat: прокси Vercel закрывает соединение, которое ~2 минуты не шлёт
+ * байты, а мы подолгу ждём WB. Поэтому ответ потоковый и каждые 15 с уходит
+ * пустая строка — соединение живёт, функция дорабатывает до конца.
+ */
+const HEARTBEAT_MS = 15_000;
 
 /**
  * Последняя ЗАКРЫТАЯ неделя WB (понедельник–воскресенье) на момент вызова (UTC).
@@ -29,13 +35,14 @@ function lastClosedWeek(now = new Date()): { from: string; to: string } {
 }
 
 /**
- * GET /api/cron/prefetch-week
+ * GET /api/cron/prefetch-week[?from=YYYY-MM-DD&to=YYYY-MM-DD]
  *
  * Фоновая подтяжка последней закрытой недели в кэш, чтобы к моменту, когда
  * пользователь откроет сайт, отчёт уже лежал в кэше и отдавался за секунды.
  * Идемпотентна и возобновляема: страницы, уже лежащие в кэше, пропускаются,
  * а если не уложились в бюджет времени — доберём в следующий запуск.
  *
+ * Ответ — NDJSON-поток: строки прогресса {"log":...}, в конце {"done":true,...}.
  * Защита: Vercel Cron шлёт заголовок Authorization: Bearer <CRON_SECRET>.
  */
 export async function GET(request: Request) {
@@ -50,69 +57,99 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "WB_STATS_TOKEN не задан" }, { status: 500 });
   }
 
-  // Можно принудительно указать неделю: ?from=YYYY-MM-DD&to=YYYY-MM-DD
   const { searchParams } = new URL(request.url);
   const week =
     searchParams.get("from") && searchParams.get("to")
       ? { from: searchParams.get("from")!, to: searchParams.get("to")! }
       : lastClosedWeek();
 
-  const started = Date.now();
-  const log: string[] = [];
-  let rrdid = 0;
-  let pages = 0;
-  let complete = false;
-  let throttled = 0;
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (obj: unknown) =>
+        controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+      const heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode("\n"));
+        } catch {
+          /* поток уже закрыт */
+        }
+      }, HEARTBEAT_MS);
 
-  try {
-    for (;;) {
-      if (Date.now() - started > TIME_BUDGET_MS) {
-        log.push("бюджет времени исчерпан — остаток доберёт следующий запуск");
-        break;
-      }
-      let page;
+      const started = Date.now();
+      let rrdid = 0;
+      let pages = 0;
+      let complete = false;
+      let throttled = 0;
+
+      send({ log: `старт: неделя ${week.from}..${week.to}` });
       try {
-        page = await loadPage(token, week.from, week.to, rrdid);
-      } catch (e) {
-        // WB держит лимит: не сдаёмся (cron запускается раз в день), а ждём
-        // с нарастающей паузой, пока хватает бюджета времени.
-        if (e instanceof WbReportError && e.status === 429 && throttled < 3) {
-          throttled++;
-          const wait = 90_000 + (throttled - 1) * 30_000;
-          if (Date.now() - started + wait > TIME_BUDGET_MS) {
-            log.push("WB держит лимит, бюджет времени не позволяет ждать — повторю в следующий запуск");
+        for (;;) {
+          if (Date.now() - started > TIME_BUDGET_MS) {
+            send({ log: "бюджет времени исчерпан — остаток доберёт следующий запуск" });
             break;
           }
-          log.push(`WB 429 — жду ${wait / 1000} сек и повторяю rrdid=${rrdid}`);
-          await new Promise((r) => setTimeout(r, wait));
-          continue;
+          let page;
+          try {
+            page = await loadPage(token, week.from, week.to, rrdid);
+          } catch (e) {
+            // WB держит лимит: не сдаёмся (cron запускается раз в день), а ждём
+            // с нарастающей паузой, пока хватает бюджета времени.
+            if (e instanceof WbReportError && e.status === 429 && throttled < 3) {
+              throttled++;
+              const wait = 90_000 + (throttled - 1) * 30_000;
+              if (Date.now() - started + wait > TIME_BUDGET_MS) {
+                send({ log: "WB держит лимит, бюджет не позволяет ждать — повторю в следующий запуск" });
+                break;
+              }
+              send({ log: `WB 429 — жду ${wait / 1000} сек и повторяю rrdid=${rrdid}` });
+              await new Promise((r) => setTimeout(r, wait));
+              continue;
+            }
+            throw e;
+          }
+          throttled = 0;
+          pages++;
+          send({
+            log:
+              `rrdid=${rrdid}: ${page.pageRowCount} строк, ` +
+              `${page.fromCache ? "из кэша" : "скачано из WB и сохранено"}, done=${page.done}`,
+          });
+          if (page.done) {
+            complete = true;
+            break;
+          }
+          rrdid = page.lastRrdId;
+          if (!page.fromCache) {
+            send({ log: `пауза ${WB_WAIT_MS / 1000} сек (лимит WB)` });
+            await new Promise((r) => setTimeout(r, WB_WAIT_MS));
+          }
         }
-        throw e;
+      } catch (e) {
+        send({
+          log:
+            "ошибка: " +
+            (e instanceof WbReportError || e instanceof Error ? e.message : String(e)),
+        });
+      } finally {
+        clearInterval(heartbeat);
+        send({
+          done: true,
+          week,
+          pages,
+          complete,
+          elapsedSec: Math.round((Date.now() - started) / 1000),
+        });
+        controller.close();
       }
-      throttled = 0;
-      pages++;
-      log.push(
-        `rrdid=${rrdid}: ${page.pageRowCount} строк, ` +
-          `${page.fromCache ? "из кэша" : "скачано из WB"}, done=${page.done}`
-      );
-      if (page.done) {
-        complete = true;
-        break;
-      }
-      rrdid = page.lastRrdId;
-      if (!page.fromCache) await new Promise((r) => setTimeout(r, WB_WAIT_MS));
-    }
-  } catch (e) {
-    log.push(
-      "ошибка: " + (e instanceof WbReportError || e instanceof Error ? e.message : String(e))
-    );
-  }
+    },
+  });
 
-  return NextResponse.json({
-    week,
-    pages,
-    complete,
-    elapsedSec: Math.round((Date.now() - started) / 1000),
-    log,
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no",
+    },
   });
 }
