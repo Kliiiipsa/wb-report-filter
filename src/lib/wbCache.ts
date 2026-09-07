@@ -69,6 +69,9 @@ export async function getCachedPage(
     const gz = Buffer.from(await res.arrayBuffer());
     const stored = JSON.parse(gunzipSync(gz).toString("utf8")) as Stored;
     if (stored.v !== 2 || !Array.isArray(stored.rows) || !Array.isArray(stored.fields)) return null;
+    // Пустая первая страница = отчёт на момент скачивания ещё не был сформирован.
+    // Считаем, что в кэше её нет, чтобы неделю запросили у WB заново.
+    if (rrdid === 0 && stored.rows.length === 0) return null;
     return {
       fields: stored.fields,
       rows: stored.rows,

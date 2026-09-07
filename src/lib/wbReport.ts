@@ -153,10 +153,15 @@ export async function loadPage(
     lastRrdId,
     done: arr.length < WB_PAGE_LIMIT,
   };
-  try {
-    await putCachedPage(dateFrom, dateTo, rrdid, page);
-  } catch {
-    // Кэш — best effort: не срываем выдачу, если не удалось сохранить.
+  // Пустая ПЕРВАЯ страница — почти всегда «WB ещё не сформировал отчёт за
+  // неделю» (он появляется в понедельник в течение дня), а не пустая неделя.
+  // Такое кэшировать нельзя: иначе неделя навсегда останется «готовой» и пустой.
+  if (!(rrdid === 0 && arr.length === 0)) {
+    try {
+      await putCachedPage(dateFrom, dateTo, rrdid, page);
+    } catch {
+      // Кэш — best effort: не срываем выдачу, если не удалось сохранить.
+    }
   }
   return { ...page, fromCache: false };
 }
