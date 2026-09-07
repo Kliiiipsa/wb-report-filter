@@ -20,7 +20,13 @@ import { TEMPLATE, WB_TEMPLATE_COLUMNS, cell } from "@/lib/wbColumns";
 
 export const WB_STATS_BASE = "https://statistics-api.wildberries.ru";
 export const WB_REPORT_ENDPOINT = "/api/v5/supplier/reportDetailByPeriod";
-export const WB_PAGE_LIMIT = 100000;
+/**
+ * Размер страницы. Максимум у WB — 100 000, но такие страницы (≈205 МБ, ~86 с)
+ * WB после первой же начинает отбивать 429 на ~10 минут, тогда как страницы
+ * по 20 000 (≈41 МБ, ~24 с) проходят стабильно. Больше страниц — но каждая
+ * реально приходит, и в сумме неделя собирается быстрее.
+ */
+export const WB_PAGE_LIMIT = 20000;
 
 export class WbReportError extends Error {
   status?: number;
