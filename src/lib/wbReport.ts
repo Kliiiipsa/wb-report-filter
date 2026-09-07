@@ -26,7 +26,7 @@ export const WB_REPORT_ENDPOINT = "/api/v5/supplier/reportDetailByPeriod";
  * по 20 000 (≈41 МБ, ~24 с) проходят стабильно. Больше страниц — но каждая
  * реально приходит, и в сумме неделя собирается быстрее.
  */
-export const WB_PAGE_LIMIT = 20000;
+export const WB_PAGE_LIMIT = 50000;
 
 export class WbReportError extends Error {
   status?: number;
