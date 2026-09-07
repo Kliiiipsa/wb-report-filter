@@ -35,9 +35,10 @@ import {
 import { processReports } from "@/lib/excel/processReports";
 import { exportResultToExcel } from "@/lib/excel/exportResult";
 import {
-  WB_COLUMNS,
-  WB_COMPACT_COLUMNS,
+  WB_TEMPLATE_COLUMNS,
+  WB_TEMPLATE_REQUIRED_COUNT,
   WB_BARCODE_COLUMN,
+  WB_ROW_NUMBER_COLUMN,
   wbArrayToRow,
 } from "@/lib/wbColumns";
 
@@ -93,8 +94,6 @@ export default function Home() {
   const [wbFrom, setWbFrom] = useState("");
   const [wbTo, setWbTo] = useState("");
   const [wbProgress, setWbProgress] = useState("");
-  // true = только нужные колонки (легче файл), false = все колонки WB-отчёта
-  const [wbCompact, setWbCompact] = useState(true);
   function setWbWeek(offsetWeeks: number) {
     // offsetWeeks: 0 = последние 7 дней, 1 = предыдущая неделя
     const to = new Date();
@@ -218,7 +217,7 @@ export default function Home() {
     try {
       const matched: ReportRow[] = [];
       const barcodeSet = new Set<string>();
-      let columns: string[] = wbCompact ? WB_COMPACT_COLUMNS : WB_COLUMNS;
+      let columns: string[] = WB_TEMPLATE_COLUMNS;
       let rrdid = 0;
       let done = false;
       let totalRows = 0;
@@ -237,7 +236,6 @@ export default function Home() {
               dateTo: wbTo,
               rrdid,
               barcodes: resolvedArticles,
-              compact: wbCompact,
             }),
           });
         } catch {
@@ -295,6 +293,13 @@ export default function Home() {
         );
         // Пауза нужна только если мы реально ходили в WB: страницы из кэша лимит не тратят.
         if (!done && !fromCache) await sleep(WB_WAIT_BASE_MS);
+      }
+
+      // «№» — сквозная нумерация по итоговому результату (сервер её знать не может).
+      if (columns.includes(WB_ROW_NUMBER_COLUMN)) {
+        matched.forEach((row, i) => {
+          row[WB_ROW_NUMBER_COLUMN] = i + 1;
+        });
       }
 
       const parsed: ParsedReport = {
@@ -515,22 +520,12 @@ export default function Home() {
                 </span>
               </div>
 
-              <label className="flex items-start gap-2 rounded-md border border-brand-200 bg-white px-3 py-2 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={wbCompact}
-                  onChange={(e) => setWbCompact(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 shrink-0 accent-brand-600"
-                />
-                <span>
-                  Только нужные колонки{" "}
-                  <span className="text-slate-500">
-                    ({WB_COMPACT_COLUMNS.length} вместо {WB_COLUMNS.length}) — файл
-                    заметно легче. Снимите галочку, если нужны все колонки
-                    WB-отчёта.
-                  </span>
-                </span>
-              </label>
+              <div className="rounded-md border border-brand-200 bg-white px-3 py-2 text-xs text-slate-600">
+                Колонки — <span className="font-medium text-slate-800">строго по шаблону</span>:{" "}
+                {WB_TEMPLATE_COLUMNS.length} колонок на своих позициях (A…CE),{" "}
+                {WB_TEMPLATE_REQUIRED_COUNT} обязательных заполнены из WB. Позиции не
+                сдвигаются, даже если колонка пустая.
+              </div>
 
               {wbProgress && (
                 <div className="flex items-start gap-2 rounded-md border border-brand-200 bg-white px-3 py-2 text-sm text-brand-700">

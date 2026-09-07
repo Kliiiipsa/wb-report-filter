@@ -7,16 +7,21 @@ import { createHash } from "node:crypto";
  *
  * Зачем: WB отдаёт страницу в 100k строк ~86 сек и жёстко троттлит повторные
  * запросы, а закрытая неделя никогда не меняется. Поэтому каждую страницу
- * недели скачиваем один раз, сохраняем (все колонки, gzip) и дальше отдаём
- * из кэша за секунды — без обращения к WB и без пауз между страницами.
+ * недели скачиваем один раз, сохраняем и дальше отдаём из кэша за секунды.
  *
- * Ключ страницы — sha256(секрет + период + rrdid): путь неугадываемый, а сам
- * хост хранилища нигде не публикуется. Работает только при наличии
- * BLOB_READ_WRITE_TOKEN (без него функции просто ничего не делают).
+ * Формат v2: храним СЫРЫЕ поля WB API (список полей + строки-массивы в их
+ * порядке), а не готовую раскладку. Тогда любая правка раскладки отчёта — это
+ * изменение кода, а не перекачка недель из WB.
+ *
+ * Ключ страницы — sha256(секрет + версия + период + rrdid): путь неугадываемый,
+ * а сам хост хранилища нигде не публикуется. Без BLOB_READ_WRITE_TOKEN функции
+ * просто ничего не делают.
  */
 
 export interface CachedPage {
-  /** Все строки страницы, все колонки (массивы в порядке WB_COLUMNS). */
+  /** Имена полей WB API в порядке значений в `rows`. */
+  fields: string[];
+  /** Все строки страницы: массивы значений в порядке `fields`. */
   rows: unknown[][];
   pageRowCount: number;
   lastRrdId: number;
@@ -24,7 +29,7 @@ export interface CachedPage {
 }
 
 interface Stored extends CachedPage {
-  v: 1;
+  v: 2;
   dateFrom: string;
   dateTo: string;
   rrdid: number;
@@ -32,6 +37,7 @@ interface Stored extends CachedPage {
 }
 
 const PREFIX = "wb-weeks/";
+const VERSION = "v2";
 
 function enabled(): boolean {
   return !!process.env.BLOB_READ_WRITE_TOKEN;
@@ -40,7 +46,7 @@ function enabled(): boolean {
 function keyFor(dateFrom: string, dateTo: string, rrdid: number): string {
   const salt = process.env.CRON_SECRET ?? process.env.BLOB_READ_WRITE_TOKEN ?? "";
   const h = createHash("sha256")
-    .update(`${salt}|${dateFrom}|${dateTo}|${rrdid}`)
+    .update(`${salt}|${VERSION}|${dateFrom}|${dateTo}|${rrdid}`)
     .digest("hex")
     .slice(0, 40);
   return `${PREFIX}${h}.json.gz`;
@@ -62,8 +68,9 @@ export async function getCachedPage(
     if (!res.ok) return null;
     const gz = Buffer.from(await res.arrayBuffer());
     const stored = JSON.parse(gunzipSync(gz).toString("utf8")) as Stored;
-    if (stored.v !== 1 || !Array.isArray(stored.rows)) return null;
+    if (stored.v !== 2 || !Array.isArray(stored.rows) || !Array.isArray(stored.fields)) return null;
     return {
+      fields: stored.fields,
       rows: stored.rows,
       pageRowCount: stored.pageRowCount,
       lastRrdId: stored.lastRrdId,
@@ -84,7 +91,7 @@ export async function putCachedPage(
 ): Promise<void> {
   if (!enabled()) return;
   const stored: Stored = {
-    v: 1,
+    v: 2,
     dateFrom,
     dateTo,
     rrdid,

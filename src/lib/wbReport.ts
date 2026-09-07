@@ -1,18 +1,17 @@
-import { ReportRow } from "@/lib/types";
 import { getCachedPage, putCachedPage } from "@/lib/wbCache";
-import { COLS, DATE_KEYS, BARCODE_IDX, cell, indicesFor } from "@/lib/wbColumns";
+import { TEMPLATE, WB_TEMPLATE_COLUMNS, cell } from "@/lib/wbColumns";
 
 /**
  * Серверная интеграция с WB Statistics API (детальный отчёт о реализации).
  *
- * Метод reportDetailByPeriod отдаёт настоящий построчный WB-отчёт со всеми
- * колонками (Тип документа, Обоснование для оплаты, даты, регион и т.д.).
+ * Метод reportDetailByPeriod отдаёт настоящий построчный WB-отчёт (≈90 полей).
  * Ограничения WB: максимум 100 000 строк на запрос (~205 МБ, ~86 сек) и
  * жёсткий троттлинг повторных запросов. Поэтому:
- *  - выгрузка идёт постранично по курсору rrdid (пагинацию ведёт клиент,
- *    выдерживая паузу между страницами);
- *  - каждая скачанная страница сохраняется в кэш (Vercel Blob) и в следующий
- *    раз отдаётся оттуда мгновенно — закрытая неделя WB не меняется.
+ *  - выгрузка идёт постранично по курсору rrdid (пагинацию ведёт клиент);
+ *  - каждая скачанная страница сохраняется в кэш (Vercel Blob) СЫРОЙ — все
+ *    поля WB — и в следующий раз отдаётся оттуда мгновенно;
+ *  - раскладка отчёта (позиции колонок по шаблону коллег) применяется при
+ *    выдаче, см. wbColumns.ts.
  *
  * Токен читается из серверной переменной окружения WB_STATS_TOKEN.
  * ВНИМАНИЕ: модуль серверный (zlib/blob) — в клиентские компоненты не импортировать,
@@ -46,22 +45,9 @@ function parseRetryAfter(res: Response): number | undefined {
   return undefined;
 }
 
-/** Преобразует строку API в строку с русскими заголовками (как в WB-отчёте). */
-export function mapWbRow(apiRow: Record<string, unknown>): ReportRow {
-  const row: ReportRow = {};
-  for (const [ru, key] of COLS) {
-    row[ru] = cell(apiRow[key], DATE_KEYS.has(key));
-  }
-  return row;
-}
-
-/** Строка API -> массив всех колонок в порядке COLS (формат хранения в кэше). */
-function fullRowArray(apiRow: Record<string, unknown>): unknown[] {
-  return COLS.map(([, key]) => cell(apiRow[key], DATE_KEYS.has(key)));
-}
-
-/** Страница отчёта до фильтрации: все строки, все колонки. */
+/** Страница отчёта до фильтрации: сырые поля WB. */
 export interface LoadedPage {
+  fields: string[];
   rows: unknown[][];
   pageRowCount: number;
   lastRrdId: number;
@@ -130,13 +116,21 @@ export async function loadPage(
   if (cached) return { ...cached, fromCache: true };
 
   const arr = await fetchFromWb(token, dateFrom, dateTo, rrdid);
+
+  // Список полей — объединение ключей всех строк (WB может опускать поля).
+  const fieldSet = new Set<string>();
+  for (const r of arr) for (const k of Object.keys(r)) fieldSet.add(k);
+  const fields = [...fieldSet];
+
   let lastRrdId = rrdid;
   const rows = arr.map((r) => {
     const id = Number(r.rrd_id);
     if (!Number.isNaN(id)) lastRrdId = id;
-    return fullRowArray(r);
+    return fields.map((f) => (r[f] === undefined ? null : r[f]));
   });
+
   const page = {
+    fields,
     rows,
     pageRowCount: arr.length,
     lastRrdId,
@@ -151,7 +145,7 @@ export async function loadPage(
 }
 
 export interface WbPage {
-  /** Заголовки колонок, в порядке которых собраны массивы `matched`. */
+  /** Заголовки колонок (раскладка шаблона A…CE), в порядке массивов `matched`. */
   columns: string[];
   /** Совпавшие строки этой страницы в компактном виде (массивы по порядку columns). */
   matched: unknown[][];
@@ -168,30 +162,37 @@ export interface WbPage {
 }
 
 /**
- * Тянет ОДНУ страницу отчёта (кэш или WB) и фильтрует её по набору баркодов,
- * оставляя колонки выбранного режима. Пагинацию ведёт вызывающий код.
+ * Тянет ОДНУ страницу отчёта (кэш или WB), фильтрует по набору баркодов и
+ * раскладывает строки по позициям шаблона. Пагинацию ведёт вызывающий код.
  */
 export async function fetchWbReportPage(
   token: string,
   dateFrom: string,
   dateTo: string,
   rrdid: number,
-  barcodes: Set<string>,
-  compact = true
+  barcodes: Set<string>
 ): Promise<WbPage> {
   const page = await loadPage(token, dateFrom, dateTo, rrdid);
-  const idx = indicesFor(compact);
+
+  // Индексы сырых полей: для каждой колонки шаблона — откуда брать значение.
+  const fieldIdx = new Map<string, number>();
+  page.fields.forEach((f, i) => fieldIdx.set(f, i));
+  const srcIdx = TEMPLATE.map((c) => (c.key ? fieldIdx.get(c.key) ?? -1 : -1));
+  const isDate = TEMPLATE.map((c) => !!c.date);
+  const barcodeSrc = fieldIdx.get("barcode") ?? -1;
 
   const matched: unknown[][] = [];
   const seen = new Set<string>();
-  for (const row of page.rows) {
-    const bc = String(row[BARCODE_IDX] ?? "").trim();
+  for (const raw of page.rows) {
+    const bc = barcodeSrc >= 0 ? String(raw[barcodeSrc] ?? "").trim() : "";
     if (bc) seen.add(bc);
-    if (bc && barcodes.has(bc)) matched.push(idx.map((i) => row[i]));
+    if (bc && barcodes.has(bc)) {
+      matched.push(srcIdx.map((i, k) => (i >= 0 ? cell(raw[i], isDate[k]) : null)));
+    }
   }
 
   return {
-    columns: idx.map((i) => COLS[i][0]),
+    columns: WB_TEMPLATE_COLUMNS,
     matched,
     pageRowCount: page.pageRowCount,
     pageBarcodes: [...seen],
