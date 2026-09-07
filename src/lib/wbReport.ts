@@ -1,4 +1,4 @@
-import { getCachedPage, putCachedPage } from "@/lib/wbCache";
+import { getCachedPage, getCachedPageV1, putCachedPage } from "@/lib/wbCache";
 import { TEMPLATE, WB_TEMPLATE_COLUMNS, cell } from "@/lib/wbColumns";
 
 /**
@@ -116,8 +116,19 @@ export async function loadPage(
   token: string,
   dateFrom: string,
   dateTo: string,
-  rrdid: number
+  rrdid: number,
+  /** Разрешить старый формат кэша как запасной источник (для выдачи — да, для подтяжки — нет). */
+  allowLegacy = true
 ): Promise<LoadedPage> {
+  // Для выдачи старый формат идёт ПЕРВЫМ: в нём недели лежат целиком, а в новом
+  // могут быть скачаны лишь частично (страницы разного размера — курсоры не
+  // совпадают, смешивать форматы в одной цепочке нельзя). Когда подтяжка
+  // докачает неделю в v2, она удалит v1-страницы — и приоритет перейдёт к v2.
+  if (allowLegacy) {
+    const legacy = await getCachedPageV1(dateFrom, dateTo, rrdid);
+    if (legacy) return { ...legacy, fromCache: true };
+  }
+
   const cached = await getCachedPage(dateFrom, dateTo, rrdid);
   if (cached) return { ...cached, fromCache: true };
 

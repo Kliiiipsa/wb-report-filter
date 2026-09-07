@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { loadPage, WbReportError } from "@/lib/wbReport";
+import { deleteLegacyWeek } from "@/lib/wbCache";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -91,7 +92,8 @@ export async function GET(request: Request) {
           }
           let page;
           try {
-            page = await loadPage(token, week.from, week.to, rrdid);
+            // Подтяжка всегда хочет свежий формат: старый кэш не считается.
+            page = await loadPage(token, week.from, week.to, rrdid, false);
           } catch (e) {
             // WB держит лимит. Слепые повторы каждые 1–2 минуты только продлевают
             // блокировку (проверено), поэтому: повторяем ОДИН раз и только если WB
@@ -127,6 +129,14 @@ export async function GET(request: Request) {
           });
           if (page.done) {
             complete = true;
+            // Неделя целиком в новом формате — старые страницы больше не нужны,
+            // иначе выдача продолжит отдавать их (там нет части колонок).
+            try {
+              const removed = await deleteLegacyWeek(week.from, week.to);
+              if (removed) send({ log: `удалено страниц старого формата: ${removed}` });
+            } catch (e) {
+              send({ log: "не удалось удалить старый кэш: " + (e instanceof Error ? e.message : String(e)) });
+            }
             break;
           }
           rrdid = page.lastRrdId;
