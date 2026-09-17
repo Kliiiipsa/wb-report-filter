@@ -1,5 +1,6 @@
 import { getCachedPage, getCachedPageV1, putCachedPage } from "@/lib/wbCache";
 import { TEMPLATE, WB_TEMPLATE_COLUMNS, cell } from "@/lib/wbColumns";
+import { codeSet, normalizeCode } from "@/lib/codes";
 
 /**
  * Серверная интеграция с WB Statistics API (детальный отчёт о реализации).
@@ -203,12 +204,16 @@ export async function fetchWbReportPage(
   const isDate = TEMPLATE.map((c) => !!c.date);
   const barcodeSrc = fieldIdx.get("barcode") ?? -1;
 
+  // Сравнение по нормализованному коду: WB для части товаров присылает GTIN
+  // (14 знаков с ведущим нулём) вместо прежнего баркода, а Google Sheets
+  // ведущий ноль теряет. См. lib/codes.ts.
+  const want = codeSet(barcodes);
   const matched: unknown[][] = [];
   const seen = new Set<string>();
   for (const raw of page.rows) {
     const bc = barcodeSrc >= 0 ? String(raw[barcodeSrc] ?? "").trim() : "";
     if (bc) seen.add(bc);
-    if (bc && barcodes.has(bc)) {
+    if (bc && want.has(normalizeCode(bc))) {
       matched.push(srcIdx.map((i, k) => (i >= 0 ? cell(raw[i], isDate[k]) : null)));
     }
   }

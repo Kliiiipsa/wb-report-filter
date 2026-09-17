@@ -84,28 +84,38 @@ export async function GET() {
     );
   }
 
-  // 3. Определяем индекс колонки «Баркод».
-  const headerRow = (matrix[0] ?? []).map((h) => normalizeArticle(h));
-  const target = GOOGLE_SHEET.columnName.trim().toLowerCase();
-
-  let colIndex = headerRow.findIndex((h) => h.toLowerCase() === target);
-  // Частичное совпадение (на случай лишних символов в заголовке).
-  if (colIndex === -1) {
-    colIndex = headerRow.findIndex((h) => h.toLowerCase().includes(target));
+  // 3. Ищем строку заголовков и ВСЕ колонки с кодами товара.
+  // Заголовок не всегда в первой строке: выше него может быть пустая строка
+  // или заголовок таблицы, поэтому проверяем первые несколько строк.
+  let headerRowIndex = 0;
+  let colIndexes: number[] = [];
+  for (let r = 0; r < Math.min(5, matrix.length); r++) {
+    const row = (matrix[r] ?? []).map((h) => normalizeArticle(h));
+    const found = row
+      .map((h, i) => (GOOGLE_SHEET.codeHeaderPattern.test(h) ? i : -1))
+      .filter((i) => i >= 0);
+    if (found.length) {
+      headerRowIndex = r;
+      colIndexes = found;
+      break;
+    }
   }
   let usedFallback = false;
 
-  if (colIndex === -1) {
-    // 4. Fallback — колонка E (индекс 4).
-    colIndex = GOOGLE_SHEET.fallbackColIndex;
+  if (colIndexes.length === 0) {
+    // 4. Fallback — колонка E (индекс 4), заголовок в первой строке.
+    colIndexes = [GOOGLE_SHEET.fallbackColIndex];
     usedFallback = true;
   }
 
-  // 5. Забираем значения колонки (пропускаем строку заголовка).
+  const headerRow = (matrix[headerRowIndex] ?? []).map((h) => normalizeArticle(h));
+  const usedColumns = colIndexes.map((i) => headerRow[i] || `колонка ${i + 1}`);
+
+  // 5. Забираем значения всех найденных колонок (строку заголовка пропускаем).
   const rawValues: unknown[] = [];
-  for (let r = 1; r < matrix.length; r++) {
+  for (let r = headerRowIndex + 1; r < matrix.length; r++) {
     const row = matrix[r] ?? [];
-    rawValues.push(row[colIndex] ?? null);
+    for (const c of colIndexes) rawValues.push(row[c] ?? null);
   }
 
   // 6. Очистка: trim, привести к строкам, убрать пустые и дубли.
@@ -127,6 +137,7 @@ export async function GET() {
     usedFallback,
     source: GOOGLE_SHEET_SOURCE_LABEL,
     sheetName: GOOGLE_SHEET.sheetName,
-    columnName: GOOGLE_SHEET.columnName,
+    columnName: usedColumns.join(" + ") || GOOGLE_SHEET.columnName,
+    usedColumns,
   });
 }

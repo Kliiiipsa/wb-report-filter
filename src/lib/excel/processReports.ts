@@ -6,6 +6,7 @@ import {
   SOURCE_COLUMN,
 } from "@/lib/types";
 import { normalizeArticle } from "@/lib/excel/parseReports";
+import { normalizeCode } from "@/lib/codes";
 
 /**
  * Фильтрует строки отчетов по списку артикулов пользователя и собирает
@@ -18,7 +19,12 @@ export function processReports(
   reports: ParsedReport[],
   articles: string[]
 ): ProcessingResult {
-  const articleSet = new Set(articles.map(normalizeArticle));
+  // Сопоставление идёт по нормализованному коду (баркод или GTIN), см. lib/codes.ts.
+  const articleByCode = new Map<string, string>();
+  for (const a of articles) {
+    const c = normalizeCode(a);
+    if (c && !articleByCode.has(c)) articleByCode.set(c, a);
+  }
 
   // Объединенный список заголовков: сохраняем порядок появления,
   // в конце добавляем колонку «Источник файла».
@@ -42,11 +48,13 @@ export function processReports(
   for (const report of reports) {
     for (const row of report.rows) {
       totalRowsInReports++;
-      const nm = normalizeArticle(row[report.barcodeColumn]);
-      if (nm) uniqueArticlesInReports.add(nm);
+      const raw = normalizeArticle(row[report.barcodeColumn]);
+      if (raw) uniqueArticlesInReports.add(raw);
 
-      if (nm && articleSet.has(nm)) {
-        foundArticles.add(nm);
+      const code = normalizeCode(raw);
+      const article = code ? articleByCode.get(code) : undefined;
+      if (article !== undefined) {
+        foundArticles.add(article);
         rows.push({ ...row, [SOURCE_COLUMN]: report.fileName });
       }
     }
