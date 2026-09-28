@@ -316,9 +316,15 @@ export async function getCardCodeGroups(): Promise<string[][] | null> {
   }
 }
 
-export async function putCardCodeGroups(groups: string[][]): Promise<void> {
+export async function putCardCodeGroups(
+  groups: string[][],
+  /** Полные сведения о размерах — для выгрузки справочника кодов. */
+  sizes?: unknown[]
+): Promise<void> {
   if (!enabled()) return;
-  const gz = gzipSync(Buffer.from(JSON.stringify({ savedAt: new Date().toISOString(), groups }), "utf8"));
+  const gz = gzipSync(
+    Buffer.from(JSON.stringify({ savedAt: new Date().toISOString(), groups, sizes }), "utf8")
+  );
   await put(keyForCardCodes(), gz, {
     access: "public",
     addRandomSuffix: false,

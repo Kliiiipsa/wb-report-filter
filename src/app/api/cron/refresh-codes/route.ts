@@ -32,7 +32,7 @@ export async function GET(request: Request) {
     const withNewCode = sizes.filter((s) =>
       s.skus.some((c) => c.length === 14 && c.startsWith("0"))
     ).length;
-    await putCardCodeGroups(sizes.map((s) => s.skus));
+    await putCardCodeGroups(sizes.map((s) => s.skus), sizes);
     return NextResponse.json({
       ok: true,
       sizes: sizes.length,
