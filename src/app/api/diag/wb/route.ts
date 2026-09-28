@@ -30,10 +30,16 @@ export async function GET(request: Request) {
   }
 
   const url = `https://${host}${path.startsWith("/") ? path : "/" + path}`;
+  const max = Math.min(Number(searchParams.get("max") ?? 500) || 500, 400_000);
+  // К документации (dev.wildberries.ru) ходим без токена — он там не нужен.
+  const isDocs = /^dev\.wildberries\.ru$/i.test(host);
   const started = Date.now();
   try {
-    const res = await fetch(url, { headers: { Authorization: token }, cache: "no-store" });
-    const body = (await res.text()).slice(0, 500);
+    const res = await fetch(url, {
+      headers: isDocs ? {} : { Authorization: token },
+      cache: "no-store",
+    });
+    const body = (await res.text()).slice(0, max);
     return NextResponse.json({
       url,
       status: res.status,
