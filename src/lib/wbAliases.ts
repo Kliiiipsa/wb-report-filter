@@ -27,6 +27,8 @@ interface Pair {
 }
 
 const isNewCode = (code: string) => code.length === 14 && code.startsWith("0");
+/** Сколько кодов у одного размера считается нормой (по карточкам WB — максимум 3). */
+const MAX_GROUP = 4;
 
 /**
  * Карта: нормализованный код → все коды того же товара (включая его самого).
@@ -62,7 +64,12 @@ export async function weekCodeAliases(
     for (const row of page.rows) {
       const raw = String(row[iCode] ?? "").trim();
       if (!raw) continue;
-      const key = `${row[iNm] ?? ""}|${String(row[iSize] ?? "").trim()}`;
+      // Без артикула товар не опознать: в отчёте есть строки с кодом, но с
+      // нулевым nm_id (услуги, возмещения). Если их сгруппировать вместе, коды
+      // разных товаров склеятся в одну группу и в отчёт попадёт чужое.
+      const nm = String(row[iNm] ?? "").trim();
+      if (!nm || nm === "0") continue;
+      const key = `${nm}|${String(row[iSize] ?? "").trim()}`;
       let p = byProduct.get(key);
       if (!p) {
         p = { old: new Set(), neu: new Set() };
@@ -76,6 +83,9 @@ export async function weekCodeAliases(
   for (const { old, neu } of byProduct.values()) {
     if (!neu.size || !old.size) continue;
     const all = [...old, ...neu];
+    // У размера обычно 2–3 кода. Более крупная группа означает, что ключ
+    // «артикул + размер» собрал разные товары — такой связи не доверяем.
+    if (all.length > MAX_GROUP) continue;
     for (const c of all) {
       const known = aliases.get(c);
       if (known) aliases.set(c, [...new Set([...known, ...all])]);
@@ -102,7 +112,7 @@ export async function cardCodeAliases(): Promise<Map<string, string[]>> {
   if (!groups) return aliases;
   for (const group of groups) {
     const codes = [...new Set(group.map((c) => normalizeCode(c)).filter(Boolean))];
-    if (codes.length < 2) continue;
+    if (codes.length < 2 || codes.length > MAX_GROUP) continue;
     for (const c of codes) {
       const known = aliases.get(c);
       aliases.set(c, known ? [...new Set([...known, ...codes])] : codes);

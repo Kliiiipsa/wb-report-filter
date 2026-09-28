@@ -247,7 +247,9 @@ export async function putCachedReports(
 function keyForAliases(dateFrom: string, dateTo: string, pages: number): string {
   const salt = process.env.CRON_SECRET ?? process.env.BLOB_READ_WRITE_TOKEN ?? "";
   const h = createHash("sha256")
-    .update(`${salt}|aliases|${dateFrom}|${dateTo}|${pages}`)
+    // v2: прежние карты строились и по строкам без артикула, из-за чего коды
+    // разных товаров попадали в одну группу. Версия в ключе обнуляет их.
+    .update(`${salt}|aliases|v2|${dateFrom}|${dateTo}|${pages}`)
     .digest("hex")
     .slice(0, 40);
   return `${PREFIX}${h}.json.gz`;
