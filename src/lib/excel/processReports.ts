@@ -17,13 +17,23 @@ import { normalizeCode } from "@/lib/codes";
  */
 export function processReports(
   reports: ParsedReport[],
-  articles: string[]
+  articles: string[],
+  /**
+   * Дополнительные коды: «код в отчёте → код из списка пользователя». Нужны,
+   * когда WB прислал товар под новым кодом (GTIN), которого в справочнике ещё
+   * нет; связь восстановлена по данным самой недели, см. lib/wbAliases.ts.
+   */
+  aliases?: Iterable<[string, string]>
 ): ProcessingResult {
   // Сопоставление идёт по нормализованному коду (баркод или GTIN), см. lib/codes.ts.
   const articleByCode = new Map<string, string>();
   for (const a of articles) {
     const c = normalizeCode(a);
     if (c && !articleByCode.has(c)) articleByCode.set(c, a);
+  }
+  for (const [code, article] of aliases ?? []) {
+    const c = normalizeCode(code);
+    if (c && !articleByCode.has(c)) articleByCode.set(c, article);
   }
 
   // Объединенный список заголовков: сохраняем порядок появления,

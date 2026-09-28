@@ -7,6 +7,7 @@ import {
 } from "@/lib/wbCache";
 import { TEMPLATE, WB_TEMPLATE_COLUMNS, cell } from "@/lib/wbColumns";
 import { codeSet, normalizeCode } from "@/lib/codes";
+import { expandWanted, weekCodeAliases } from "@/lib/wbAliases";
 import {
   fetchDetailed,
   listReports,
@@ -169,6 +170,11 @@ export interface WbPage {
   done: boolean;
   /** Страница пришла из кэша — клиенту не нужно ждать лимит WB. */
   fromCache: boolean;
+  /**
+   * Пары «код в строке WB → код из справочника»: строки, попавшие в отчёт по
+   * новому коду товара, которого в справочнике ещё нет.
+   */
+  aliases: [string, string][];
 }
 
 /**
@@ -194,15 +200,28 @@ export async function fetchWbReportPage(
   // Сравнение по нормализованному коду: WB для части товаров присылает GTIN
   // (14 знаков с ведущим нулём) вместо прежнего баркода, а Google Sheets
   // ведущий ноль теряет. См. lib/codes.ts.
-  const want = codeSet(barcodes);
+  const wanted = new Map<string, string>();
+  for (const b of barcodes) {
+    const c = normalizeCode(b);
+    if (c && !wanted.has(c)) wanted.set(c, String(b));
+  }
+  // Плюс подтягиваем «двойников» кода из самой недели: если справочник ещё не
+  // дополнили новым кодом, строки с ним всё равно попадут в отчёт. См. wbAliases.ts.
+  const { want, added } = expandWanted(wanted, await weekCodeAliases(dateFrom, dateTo));
+  const aliasOf = new Map(added);
+
   const matched: unknown[][] = [];
   const seen = new Set<string>();
+  const usedAliases = new Map<string, string>();
   for (const raw of page.rows) {
     const bc = barcodeSrc >= 0 ? String(raw[barcodeSrc] ?? "").trim() : "";
     if (bc) seen.add(bc);
-    if (bc && want.has(normalizeCode(bc))) {
-      matched.push(srcIdx.map((i, k) => (i >= 0 ? cell(raw[i], isDate[k]) : null)));
-    }
+    if (!bc) continue;
+    const code = normalizeCode(bc);
+    if (!want.has(code)) continue;
+    matched.push(srcIdx.map((i, k) => (i >= 0 ? cell(raw[i], isDate[k]) : null)));
+    const origin = aliasOf.get(code);
+    if (origin !== undefined) usedAliases.set(bc, origin);
   }
 
   return {
@@ -213,5 +232,6 @@ export async function fetchWbReportPage(
     lastRrdId: page.lastRrdId,
     done: page.done,
     fromCache: page.fromCache,
+    aliases: [...usedAliases],
   };
 }

@@ -239,6 +239,57 @@ export async function putCachedReports(
   });
 }
 
+/**
+ * Карта «код ↔ код того же товара» для недели (см. wbAliases.ts).
+ * Подпись — число страниц, по которым она собрана: докачали страницу — карта
+ * пересобирается.
+ */
+function keyForAliases(dateFrom: string, dateTo: string, pages: number): string {
+  const salt = process.env.CRON_SECRET ?? process.env.BLOB_READ_WRITE_TOKEN ?? "";
+  const h = createHash("sha256")
+    .update(`${salt}|aliases|${dateFrom}|${dateTo}|${pages}`)
+    .digest("hex")
+    .slice(0, 40);
+  return `${PREFIX}${h}.json.gz`;
+}
+
+export async function getCachedAliases(
+  dateFrom: string,
+  dateTo: string,
+  pages: number
+): Promise<Record<string, string[]> | null> {
+  if (!enabled()) return null;
+  try {
+    const key = keyForAliases(dateFrom, dateTo, pages);
+    const { blobs } = await list({ prefix: key, limit: 1 });
+    const blob = blobs.find((b) => b.pathname === key);
+    if (!blob) return null;
+    const res = await fetch(blob.url, { cache: "no-store" });
+    if (!res.ok) return null;
+    const stored = JSON.parse(gunzipSync(Buffer.from(await res.arrayBuffer())).toString("utf8"));
+    return stored?.aliases ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function putCachedAliases(
+  dateFrom: string,
+  dateTo: string,
+  pages: number,
+  aliases: Record<string, string[]>
+): Promise<void> {
+  if (!enabled()) return;
+  const gz = gzipSync(Buffer.from(JSON.stringify({ dateFrom, dateTo, pages, aliases }), "utf8"));
+  await put(keyForAliases(dateFrom, dateTo, pages), gz, {
+    access: "public",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/gzip",
+    cacheControlMaxAge: 0,
+  });
+}
+
 /** Сохраняет страницу в кэш (перезаписывает, если уже есть). */
 export async function putCachedPage(
   dateFrom: string,

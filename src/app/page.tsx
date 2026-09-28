@@ -211,12 +211,14 @@ export default function Home() {
     setResult(null);
     setStatus("loading");
     setWbProgress(
-      "Запрашиваю WB… Неделя обычно = 2 страницы по 100 000 строк; между ними " +
-        "обязательная пауза 60 сек (лимит WB). Обычно занимает 2–3 минуты."
+      "Запрашиваю WB… Неделя — это несколько страниц по 20 000 строк; между " +
+        "обращениями к WB обязательная пауза около минуты (лимит WB). " +
+        "Уже скачанная неделя открывается из кэша за секунды."
     );
     try {
       const matched: ReportRow[] = [];
       const barcodeSet = new Set<string>();
+      const aliasPairs = new Map<string, string>();
       let columns: string[] = WB_TEMPLATE_COLUMNS;
       // Курсор страницы: сервер сам решает, что в нём (число или «отчёт:rrdId»).
       let rrdid: number | string = 0;
@@ -279,6 +281,11 @@ export default function Home() {
         for (const a of data.matched ?? []) matched.push(wbArrayToRow(a, columns));
         totalRows += data.pageRowCount ?? 0;
         for (const b of data.pageBarcodes ?? []) barcodeSet.add(b);
+        // Строки, найденные по новому коду товара: запоминаем, какому коду из
+        // справочника они соответствуют, иначе фильтр ниже их отбросит.
+        for (const pair of data.aliases ?? []) {
+          if (Array.isArray(pair) && pair.length === 2) aliasPairs.set(String(pair[0]), String(pair[1]));
+        }
         rrdid = data.lastRrdId ?? rrdid;
         done = !!data.done;
         const fromCache = !!data.fromCache;
@@ -310,7 +317,7 @@ export default function Home() {
         headers: columns,
         barcodeColumn: WB_BARCODE_COLUMN,
       };
-      const processed = processReports([parsed], resolvedArticles);
+      const processed = processReports([parsed], resolvedArticles, aliasPairs);
       // Патчим агрегаты по данным сервера (всего строк / уникальных баркодов в отчёте).
       processed.stats.totalRowsInReports = totalRows;
       processed.stats.uniqueArticlesInReports = barcodeSet.size;
