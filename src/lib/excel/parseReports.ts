@@ -6,7 +6,8 @@ import {
   ParsedReport,
   ReportRow,
 } from "@/lib/types";
-import { parseXlsxFast } from "@/lib/excel/fastXlsx";
+import { extractXlsxFromZip, parseXlsxFast, parseXlsxStream } from "@/lib/excel/fastXlsx";
+import { normalizeCode } from "@/lib/codes";
 
 /** Понятная ошибка обработки отчета. */
 export class ReportParseError extends Error {
@@ -125,10 +126,18 @@ function tryReadWorkbook(bytes: Uint8Array): XLSX.WorkBook | null {
  * Разбирает один загруженный файл отчета Wildberries.
  * Выполняется на клиенте — файл не отправляется на сервер.
  */
-export async function parseReportFile(file: File): Promise<ParsedReport> {
-  if (!file.name.toLowerCase().endsWith(".xlsx")) {
+export async function parseReportFile(
+  file: File,
+  /**
+   * Нормализованные коды товара. Если переданы — строки отбираются прямо при
+   * разборе, и огромный отчёт не оседает в памяти целиком.
+   */
+  codes?: Set<string>
+): Promise<ParsedReport> {
+  const lower = file.name.toLowerCase();
+  if (!lower.endsWith(".xlsx") && !lower.endsWith(".zip")) {
     throw new ReportParseError(
-      `Файл «${file.name}» не в формате .xlsx.`
+      `Файл «${file.name}» не в формате .xlsx или .zip.`
     );
   }
   if (file.size > MAX_FILE_SIZE) {
@@ -139,17 +148,47 @@ export async function parseReportFile(file: File): Promise<ParsedReport> {
     );
   }
 
-  const bytes = new Uint8Array(await file.arrayBuffer());
+  let bytes = new Uint8Array(await file.arrayBuffer());
+  // Кабинет WB отдаёт крупный отчёт архивом — достаём из него книгу.
+  if (lower.endsWith(".zip")) {
+    const inner = extractXlsxFromZip(bytes);
+    if (!inner) {
+      throw new ReportParseError(
+        `В архиве «${file.name}» не найден файл .xlsx.`
+      );
+    }
+    bytes = new Uint8Array(inner);
+  }
 
   let matrix: unknown[][] = [];
   let sheetName = "";
 
-  // 1) Основной путь: свой быстрый парсер на fflate. Не зависит от заявленного
-  //    диапазона листа и не зависает на больших отчётах WB (сотни МБ XML).
-  const fast = parseXlsxFast(bytes);
-  if (fast) {
-    matrix = fast.matrix;
-    sheetName = fast.sheetName;
+  // 1) Основной путь: свой потоковый парсер на fflate. Не зависит от
+  //    заявленного диапазона листа и не собирает весь XML в одну строку,
+  //    поэтому тянет отчёты из кабинета в сотни МБ.
+  //    Если передан набор кодов — строки фильтруются прямо при разборе, и в
+  //    памяти остаются только нужные.
+  let headerCells: unknown[] | null = null;
+  let codeCol = -1;
+  const stream = parseXlsxStream(bytes, (cells, i) => {
+    if (i === 0) {
+      headerCells = cells;
+      matrix.push(cells);
+      if (codes) {
+        const hdrs = cells.map((h, c) =>
+          h === null || h === undefined || String(h).trim() === "" ? `Столбец ${c + 1}` : String(h).trim()
+        );
+        codeCol = hdrs.indexOf(detectBarcodeColumn(hdrs));
+      }
+      return;
+    }
+    if (cells.every((c) => c === null || c === undefined || c === "")) return;
+    if (codes && codeCol >= 0 && !codes.has(normalizeCode(cells[codeCol]))) return;
+    matrix.push(cells);
+  });
+  if (stream) {
+    sheetName = stream.sheetName;
+    if (headerCells === null) matrix = [];
   } else {
     // 2) Фолбэк только для файлов, которые не распаковались как ZIP
     //    (иной/повреждённый контейнер). SheetJS здесь безопасен по объёму.

@@ -33,6 +33,7 @@ import {
   parseArticlesFromText,
 } from "@/lib/excel/parseArticles";
 import { processReports } from "@/lib/excel/processReports";
+import { normalizeCode } from "@/lib/codes";
 import { exportResultToExcel } from "@/lib/excel/exportResult";
 import {
   WB_TEMPLATE_COLUMNS,
@@ -368,15 +369,38 @@ export default function Home() {
     setStatus("loading");
     try {
       const reports: ParsedReport[] = [];
+      // Вторые коды тех же товаров (GTIN) из карточек WB: файл из кабинета
+      // содержит их наравне с прежними баркодами, см. lib/wbAliases.ts.
+      const aliasPairs = new Map<string, string>();
       if (reportSource === "file") {
-        for (const file of files) {
-          reports.push(await parseReportFile(file));
+        const codes = new Map<string, string>();
+        for (const a of resolvedArticles) {
+          const c = normalizeCode(a);
+          if (c && !codes.has(c)) codes.set(c, a);
         }
+        try {
+          const res = await fetch("/api/codes/groups");
+          const data = await res.json();
+          for (const group of data.groups ?? []) {
+            const norm = (group as string[]).map((c) => normalizeCode(c)).filter(Boolean);
+            const origin = norm.map((c) => codes.get(c)).find((x) => x !== undefined);
+            if (origin === undefined) continue;
+            for (const c of norm) if (!codes.has(c)) { codes.set(c, origin); aliasPairs.set(c, origin); }
+          }
+        } catch {
+          // Справочник кодов недоступен — ищем только по кодам из списка.
+        }
+        const wanted = new Set(codes.keys());
+        for (const file of files) {
+          setWbProgress(`Читаю «${file.name}»…`);
+          reports.push(await parseReportFile(file, wanted));
+        }
+        setWbProgress("");
       } else if (miyoumiReport) {
         reports.push(miyoumiReport);
       }
 
-      const processed = processReports(reports, resolvedArticles);
+      const processed = processReports(reports, resolvedArticles, aliasPairs);
 
       if (processed.stats.matchedRowsCount === 0) {
         setStatus("error");

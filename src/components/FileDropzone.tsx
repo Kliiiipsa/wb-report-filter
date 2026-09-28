@@ -61,7 +61,7 @@ export function FileDropzone({ files, onChange }: FileDropzoneProps) {
           Перетащите отчеты сюда или нажмите для выбора
         </p>
         <p className="mt-1 text-xs text-slate-500">
-          Поддерживаются файлы .xlsx · можно несколько
+          Поддерживаются .xlsx и .zip, до 400 МБ · можно несколько
         </p>
         <button
           type="button"
@@ -76,7 +76,7 @@ export function FileDropzone({ files, onChange }: FileDropzoneProps) {
         <input
           ref={inputRef}
           type="file"
-          accept=".xlsx"
+          accept=".xlsx,.zip"
           multiple
           hidden
           onChange={handleSelect}
