@@ -55,3 +55,56 @@ export async function GET(request: Request) {
     );
   }
 }
+
+/**
+ * POST /api/diag/wb
+ * body: { host?, path, method?, body?, max? }
+ *
+ * То же самое, но с произвольным методом и телом — новые методы WB
+ * (finance-api, sales-reports) принимают только POST.
+ */
+export async function POST(request: Request) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  const token = process.env.WB_STATS_TOKEN;
+  if (!token) return NextResponse.json({ error: "нет WB_STATS_TOKEN" }, { status: 500 });
+
+  let req: { host?: string; path?: string; method?: string; body?: unknown; max?: number };
+  try {
+    req = await request.json();
+  } catch {
+    return NextResponse.json({ error: "некорректный JSON" }, { status: 400 });
+  }
+  const host = req.host ?? "finance-api.wildberries.ru";
+  const path = req.path ?? "/ping";
+  if (!/^[a-z0-9.-]+\.wildberries\.ru$/i.test(host)) {
+    return NextResponse.json({ error: "хост не разрешён" }, { status: 400 });
+  }
+  const url = `https://${host}${path.startsWith("/") ? path : "/" + path}`;
+  const max = Math.min(Number(req.max ?? 2000) || 2000, 400_000);
+  const started = Date.now();
+  try {
+    const res = await fetch(url, {
+      method: req.method ?? "POST",
+      headers: { Authorization: token, "Content-Type": "application/json" },
+      body: req.body === undefined ? undefined : JSON.stringify(req.body),
+      cache: "no-store",
+    });
+    const text = await res.text();
+    return NextResponse.json({
+      url,
+      status: res.status,
+      ms: Date.now() - started,
+      length: text.length,
+      retryAfter: res.headers.get("x-ratelimit-retry") ?? res.headers.get("retry-after"),
+      body: text.slice(0, max),
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { url, error: e instanceof Error ? e.message : String(e), ms: Date.now() - started },
+      { status: 502 }
+    );
+  }
+}
