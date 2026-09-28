@@ -5,6 +5,12 @@ import {
   ProcessingResult,
   ResultRow,
 } from "@/lib/types";
+import {
+  downloadXlsx,
+  sheetFromMatrix,
+  sheetFromObjects,
+  type SheetData,
+} from "@/lib/excel/writeXlsx";
 
 /** Превращает строки-объекты в матрицу значений по фиксированному порядку заголовков. */
 function rowsToMatrix(rows: ResultRow[], headers: string[]): unknown[][] {
@@ -60,7 +66,41 @@ function buildNotFoundSheet(notFound: string[]): XLSX.WorkSheet {
  *  - «Сводка»;
  *  - «Не найдено».
  */
-export function exportResultToExcel(
+export async function exportResultToExcel(
+  result: ProcessingResult,
+  fileName = "Отфильтрованный_отчет_WB.xlsx",
+  onProgress?: (done: number, total: number) => void
+): Promise<void> {
+  // Книга пишется по частям: на сотне тысяч строк сборка целиком в памяти
+  // кладёт вкладку и кнопка «Скачать» внешне не срабатывает.
+  const chunks = chunkRows(result.rows, EXCEL_ROW_LIMIT);
+  const sheets: SheetData[] = chunks.map((chunk, i) =>
+    sheetFromObjects(
+      chunks.length === 1 ? "Найденные строки" : `Найденные строки ${i + 1}`,
+      result.headers,
+      chunk
+    )
+  );
+  const s = result.stats;
+  sheets.push(
+    sheetFromMatrix("Сводка", [
+      ["Показатель", "Значение"],
+      ["Загружено отчетов", s.reportsCount],
+      ["Всего строк в отчетах", s.totalRowsInReports],
+      ["Уникальных баркодов в отчетах", s.uniqueArticlesInReports],
+      ["Баркодов указано пользователем", s.userArticlesCount],
+      ["Найдено совпадений (строк)", s.matchedRowsCount],
+      ["Баркодов не найдено", s.notFoundArticlesCount],
+    ])
+  );
+  sheets.push(
+    sheetFromMatrix("Не найдено", [[BARCODE_HEADER], ...result.notFoundArticles.map((a) => [a])])
+  );
+  await downloadXlsx(fileName, sheets, onProgress);
+}
+
+/** Прежний путь через SheetJS — оставлен для небольших книг и тестов. */
+export function exportResultToExcelViaSheetJs(
   result: ProcessingResult,
   fileName = "Отфильтрованный_отчет_WB.xlsx"
 ): void {

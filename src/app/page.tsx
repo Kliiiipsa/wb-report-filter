@@ -95,6 +95,8 @@ export default function Home() {
   const [wbFrom, setWbFrom] = useState("");
   const [wbTo, setWbTo] = useState("");
   const [wbProgress, setWbProgress] = useState("");
+  const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState("");
   function setWbWeek(offsetWeeks: number) {
     // offsetWeeks: 0 = последние 7 дней, 1 = предыдущая неделя
     const to = new Date();
@@ -423,8 +425,28 @@ export default function Home() {
     }
   }
 
-  function handleDownload() {
-    if (result) exportResultToExcel(result);
+  async function handleDownload() {
+    if (!result || downloading) return;
+    setDownloading(true);
+    setDownloadProgress("Готовлю файл…");
+    setError(null);
+    try {
+      await exportResultToExcel(result, "Отфильтрованный_отчет_WB.xlsx", (done, total) => {
+        setDownloadProgress(
+          `Готовлю файл: ${done.toLocaleString("ru-RU")} из ${total.toLocaleString("ru-RU")} строк…`
+        );
+      });
+      setDownloadProgress("");
+    } catch (e) {
+      setDownloadProgress("");
+      setError(
+        "Не удалось собрать файл: " +
+          (e instanceof Error ? e.message : String(e)) +
+          ". Попробуйте закрыть лишние вкладки и повторить."
+      );
+    } finally {
+      setDownloading(false);
+    }
   }
 
   const hasReport =
@@ -756,12 +778,18 @@ export default function Home() {
                   <button
                     type="button"
                     onClick={handleDownload}
-                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+                    disabled={downloading}
+                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <Download className="h-4 w-4" />
-                    Скачать результат Excel
+                    {downloading ? "Собираю файл…" : "Скачать результат Excel"}
                   </button>
                 </div>
+                {downloadProgress && (
+                  <p className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                    {downloadProgress}
+                  </p>
+                )}
                 <PreviewTable
                   rows={result.rows}
                   headers={result.headers}
