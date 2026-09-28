@@ -7,7 +7,7 @@ import {
 } from "@/lib/wbCache";
 import { TEMPLATE, WB_TEMPLATE_COLUMNS, cell } from "@/lib/wbColumns";
 import { codeSet, normalizeCode } from "@/lib/codes";
-import { expandWanted, weekCodeAliases } from "@/lib/wbAliases";
+import { cardCodeAliases, expandWanted, mergeAliases, weekCodeAliases } from "@/lib/wbAliases";
 import {
   fetchDetailed,
   listReports,
@@ -207,7 +207,11 @@ export async function fetchWbReportPage(
   }
   // Плюс подтягиваем «двойников» кода из самой недели: если справочник ещё не
   // дополнили новым кодом, строки с ним всё равно попадут в отчёт. См. wbAliases.ts.
-  const { want, added } = expandWanted(wanted, await weekCodeAliases(dateFrom, dateTo));
+  const [weekMap, cardMap] = await Promise.all([
+    weekCodeAliases(dateFrom, dateTo),
+    cardCodeAliases(),
+  ]);
+  const { want, added } = expandWanted(wanted, mergeAliases(weekMap, cardMap));
   const aliasOf = new Map(added);
 
   const matched: unknown[][] = [];

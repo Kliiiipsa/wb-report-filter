@@ -1,4 +1,10 @@
-import { getCachedPage, getCachedAliases, putCachedAliases, type PageCursor } from "@/lib/wbCache";
+import {
+  getCachedPage,
+  getCachedAliases,
+  putCachedAliases,
+  getCardCodeGroups,
+  type PageCursor,
+} from "@/lib/wbCache";
 import { normalizeCode } from "@/lib/codes";
 
 /**
@@ -83,6 +89,38 @@ export async function weekCodeAliases(
     /* кэш — best effort */
   }
   return aliases;
+}
+
+/**
+ * Коды из карточек WB: у размера перечислены сразу все его коды.
+ * Источник полнее недельного (охватывает и товары без продаж), но требует
+ * токена с категорией «Контент» и обновляется отдельной задачей.
+ */
+export async function cardCodeAliases(): Promise<Map<string, string[]>> {
+  const groups = await getCardCodeGroups();
+  const aliases = new Map<string, string[]>();
+  if (!groups) return aliases;
+  for (const group of groups) {
+    const codes = [...new Set(group.map((c) => normalizeCode(c)).filter(Boolean))];
+    if (codes.length < 2) continue;
+    for (const c of codes) {
+      const known = aliases.get(c);
+      aliases.set(c, known ? [...new Set([...known, ...codes])] : codes);
+    }
+  }
+  return aliases;
+}
+
+/** Объединяет несколько карт соответствий в одну. */
+export function mergeAliases(...maps: Map<string, string[]>[]): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const m of maps) {
+    for (const [k, v] of m) {
+      const known = out.get(k);
+      out.set(k, known ? [...new Set([...known, ...v])] : v);
+    }
+  }
+  return out;
 }
 
 /**

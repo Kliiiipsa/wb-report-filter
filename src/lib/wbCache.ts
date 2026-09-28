@@ -290,6 +290,44 @@ export async function putCachedAliases(
   });
 }
 
+/**
+ * Коды товара из карточек WB: группы «все коды одного размера».
+ * Обновляются отдельной задачей, живут до следующего обновления.
+ */
+function keyForCardCodes(): string {
+  const salt = process.env.CRON_SECRET ?? process.env.BLOB_READ_WRITE_TOKEN ?? "";
+  const h = createHash("sha256").update(`${salt}|card-codes|v1`).digest("hex").slice(0, 40);
+  return `${PREFIX}${h}.json.gz`;
+}
+
+export async function getCardCodeGroups(): Promise<string[][] | null> {
+  if (!enabled()) return null;
+  try {
+    const key = keyForCardCodes();
+    const { blobs } = await list({ prefix: key, limit: 1 });
+    const blob = blobs.find((b) => b.pathname === key);
+    if (!blob) return null;
+    const res = await fetch(blob.url, { cache: "no-store" });
+    if (!res.ok) return null;
+    const stored = JSON.parse(gunzipSync(Buffer.from(await res.arrayBuffer())).toString("utf8"));
+    return Array.isArray(stored?.groups) ? stored.groups : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function putCardCodeGroups(groups: string[][]): Promise<void> {
+  if (!enabled()) return;
+  const gz = gzipSync(Buffer.from(JSON.stringify({ savedAt: new Date().toISOString(), groups }), "utf8"));
+  await put(keyForCardCodes(), gz, {
+    access: "public",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/gzip",
+    cacheControlMaxAge: 0,
+  });
+}
+
 /** Сохраняет страницу в кэш (перезаписывает, если уже есть). */
 export async function putCachedPage(
   dateFrom: string,
