@@ -30,7 +30,8 @@ export async function POST(request: Request) {
   let body: {
     dateFrom?: string;
     dateTo?: string;
-    rrdid?: number;
+    /** Курсор страницы: число (старый кэш) или «индекс отчёта:rrdId». */
+    rrdid?: number | string;
     barcodes?: string[];
   };
   try {

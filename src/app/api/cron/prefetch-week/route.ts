@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { loadPage, WbReportError } from "@/lib/wbReport";
+import { loadPage, WbReportError, FIRST_CURSOR, type PageCursor } from "@/lib/wbReport";
 import { deleteLegacyWeek } from "@/lib/wbCache";
 
 export const dynamic = "force-dynamic";
@@ -78,7 +78,7 @@ export async function GET(request: Request) {
       }, HEARTBEAT_MS);
 
       const started = Date.now();
-      let rrdid = 0;
+      let rrdid: PageCursor = FIRST_CURSOR;
       let pages = 0;
       let complete = false;
       let throttled = 0;
@@ -121,7 +121,7 @@ export async function GET(request: Request) {
             throw e;
           }
           throttled = 0;
-          if (rrdid === 0 && page.pageRowCount === 0) {
+          if (rrdid === FIRST_CURSOR && page.pageRowCount === 0) {
             // WB формирует недельный отчёт в понедельник в течение дня: пустой
             // ответ — «ещё не готов», а не «неделя пустая». Не считаем неделю
             // завершённой, следующий запуск попробует снова.

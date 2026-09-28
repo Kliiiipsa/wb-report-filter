@@ -1,55 +1,55 @@
-import { getCachedPage, getCachedPageV1, putCachedPage } from "@/lib/wbCache";
+import {
+  getCachedPage,
+  getCachedPageV1,
+  putCachedPage,
+  getCachedReports,
+  putCachedReports,
+} from "@/lib/wbCache";
 import { TEMPLATE, WB_TEMPLATE_COLUMNS, cell } from "@/lib/wbColumns";
 import { codeSet, normalizeCode } from "@/lib/codes";
+import {
+  fetchDetailed,
+  listReports,
+  WB_PAGE_LIMIT,
+  WbReportError,
+  type WbReportMeta,
+} from "@/lib/wbApi";
 
 /**
- * Серверная интеграция с WB Statistics API (детальный отчёт о реализации).
+ * Выгрузка детального WB-отчёта за неделю: кэш + новый финансовый API.
  *
- * Метод reportDetailByPeriod отдаёт настоящий построчный WB-отчёт (≈90 полей).
- * Ограничения WB: максимум 100 000 строк на запрос (~205 МБ, ~86 сек) и
- * жёсткий троттлинг повторных запросов. Поэтому:
- *  - выгрузка идёт постранично по курсору rrdid (пагинацию ведёт клиент);
- *  - каждая скачанная страница сохраняется в кэш (Vercel Blob) СЫРОЙ — все
- *    поля WB — и в следующий раз отдаётся оттуда мгновенно;
- *  - раскладка отчёта (позиции колонок по шаблону коллег) применяется при
- *    выдаче, см. wbColumns.ts.
+ * Как устроено:
+ *  - у недели может быть несколько отчётов (reportType 1, 2 …), поэтому курсор
+ *    страницы — строка «индекс отчёта:rrdId», а не одно число;
+ *  - страницы, скачанные прежним методом (числовой курсор), продолжают
+ *    отдаваться из кэша как есть — формат кэша не менялся;
+ *  - каждая свежая страница сохраняется в кэш СЫРОЙ (все поля WB), раскладка
+ *    по шаблону применяется при выдаче, см. wbColumns.ts.
  *
- * Токен читается из серверной переменной окружения WB_STATS_TOKEN.
- * ВНИМАНИЕ: модуль серверный (zlib/blob) — в клиентские компоненты не импортировать,
- * для них есть wbColumns.ts.
+ * Токен — в переменной окружения WB_STATS_TOKEN, нужна категория «Финансы».
+ * ВНИМАНИЕ: модуль серверный (zlib/blob), в клиентские компоненты не импортировать.
  */
 
-export const WB_STATS_BASE = "https://statistics-api.wildberries.ru";
-export const WB_REPORT_ENDPOINT = "/api/v5/supplier/reportDetailByPeriod";
-/**
- * Размер страницы. Максимум у WB — 100 000, но такие страницы (≈205 МБ, ~86 с)
- * WB после первой же начинает отбивать 429 на ~10 минут, тогда как страницы
- * по 20 000 (≈41 МБ, ~24 с) проходят стабильно. Больше страниц — но каждая
- * реально приходит, и в сумме неделя собирается быстрее.
- */
-export const WB_PAGE_LIMIT = 20000;
+export { WbReportError, WB_PAGE_LIMIT };
 
-export class WbReportError extends Error {
-  status?: number;
-  /** Сколько секунд WB просит подождать (из заголовка Retry-After), если сообщил. */
-  retryAfterSec?: number;
-  constructor(message: string, status?: number, retryAfterSec?: number) {
-    super(message);
-    this.name = "WbReportError";
-    this.status = status;
-    this.retryAfterSec = retryAfterSec;
+/** Курсор страницы: число (старый кэш) или «индекс отчёта:rrdId». */
+export type PageCursor = number | string;
+
+/** Начальный курсор недели. */
+export const FIRST_CURSOR: PageCursor = 0;
+
+function parseCursor(cursor: PageCursor): { idx: number; rrdId: number } {
+  const s = String(cursor ?? 0);
+  if (s.includes(":")) {
+    const [a, b] = s.split(":");
+    return { idx: Number(a) || 0, rrdId: Number(b) || 0 };
   }
+  return { idx: 0, rrdId: Number(s) || 0 };
 }
 
-/** Разбирает Retry-After (секунды или HTTP-дата) в секунды; undefined если нет/непонятно. */
-function parseRetryAfter(res: Response): number | undefined {
-  const raw = res.headers.get("retry-after");
-  if (!raw) return undefined;
-  const n = Number(raw);
-  if (Number.isFinite(n) && n >= 0) return Math.ceil(n);
-  const t = Date.parse(raw);
-  if (!Number.isNaN(t)) return Math.max(0, Math.ceil((t - Date.now()) / 1000));
-  return undefined;
+function isFirstPage(cursor: PageCursor): boolean {
+  const { idx, rrdId } = parseCursor(cursor);
+  return idx === 0 && rrdId === 0;
 }
 
 /** Страница отчёта до фильтрации: сырые поля WB. */
@@ -57,56 +57,29 @@ export interface LoadedPage {
   fields: string[];
   rows: unknown[][];
   pageRowCount: number;
-  lastRrdId: number;
+  lastRrdId: PageCursor;
   done: boolean;
   /** Страница взята из кэша (WB не вызывался, пауза не нужна). */
   fromCache: boolean;
 }
 
-async function fetchFromWb(
+/** Список отчётов недели: из кэша, иначе из WB (и в кэш). */
+async function reportsOfWeek(
   token: string,
   dateFrom: string,
-  dateTo: string,
-  rrdid: number
-): Promise<Record<string, unknown>[]> {
-  const url =
-    `${WB_STATS_BASE}${WB_REPORT_ENDPOINT}` +
-    `?dateFrom=${encodeURIComponent(dateFrom)}&dateTo=${encodeURIComponent(dateTo)}` +
-    `&limit=${WB_PAGE_LIMIT}&rrdid=${rrdid}`;
-
-  let res: Response;
-  try {
-    res = await fetch(url, { headers: { Authorization: token }, cache: "no-store" });
-  } catch {
-    throw new WbReportError("Не удалось подключиться к WB API.");
+  dateTo: string
+): Promise<WbReportMeta[]> {
+  const cached = await getCachedReports(dateFrom, dateTo);
+  if (cached) return cached as WbReportMeta[];
+  const list = await listReports(token, dateFrom, dateTo);
+  if (list.length) {
+    try {
+      await putCachedReports(dateFrom, dateTo, list);
+    } catch {
+      /* кэш — best effort */
+    }
   }
-
-  if (res.status === 429) {
-    const retryAfter = parseRetryAfter(res);
-    // WB часто не шлёт Retry-After, но в теле ответа обычно называет окно
-    // лимита — сохраняем его в сообщении, чтобы не гадать по логам.
-    const bodyText = (await res.text().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 200);
-    const hint = bodyText ? ` WB: «${bodyText}»` : "";
-    throw new WbReportError(
-      (retryAfter !== undefined
-        ? `WB ограничивает запросы: просит подождать ${retryAfter} сек.`
-        : "WB ограничивает запросы (лимит на частоту).") + hint,
-      429,
-      retryAfter
-    );
-  }
-  if (res.status === 401) {
-    throw new WbReportError(
-      "WB отклонил токен (401). Если токен только что создан — подождите пару минут (идёт активация).",
-      401
-    );
-  }
-  if (!res.ok) {
-    throw new WbReportError(`WB API вернул статус ${res.status}.`, res.status);
-  }
-
-  const data = (await res.json().catch(() => null)) as Record<string, unknown>[] | null;
-  return Array.isArray(data) ? data : [];
+  return list;
 }
 
 /**
@@ -117,51 +90,65 @@ export async function loadPage(
   token: string,
   dateFrom: string,
   dateTo: string,
-  rrdid: number,
+  cursor: PageCursor = FIRST_CURSOR,
   /** Разрешить старый формат кэша как запасной источник (для выдачи — да, для подтяжки — нет). */
   allowLegacy = true
 ): Promise<LoadedPage> {
-  // Для выдачи старый формат идёт ПЕРВЫМ: в нём недели лежат целиком, а в новом
-  // могут быть скачаны лишь частично (страницы разного размера — курсоры не
-  // совпадают, смешивать форматы в одной цепочке нельзя). Когда подтяжка
-  // докачает неделю в v2, она удалит v1-страницы — и приоритет перейдёт к v2.
+  // Старый формат идёт первым: такие недели лежат в кэше целиком.
   if (allowLegacy) {
-    const legacy = await getCachedPageV1(dateFrom, dateTo, rrdid);
+    const legacy = await getCachedPageV1(dateFrom, dateTo, cursor);
     if (legacy) return { ...legacy, fromCache: true };
   }
 
-  const cached = await getCachedPage(dateFrom, dateTo, rrdid);
+  const cached = await getCachedPage(dateFrom, dateTo, cursor);
   if (cached) return { ...cached, fromCache: true };
 
-  const arr = await fetchFromWb(token, dateFrom, dateTo, rrdid);
+  const { idx, rrdId } = parseCursor(cursor);
+  const reports = await reportsOfWeek(token, dateFrom, dateTo);
+
+  // Отчётов за неделю ещё нет — WB формирует их в понедельник в течение дня.
+  if (reports.length === 0) {
+    return {
+      fields: [],
+      rows: [],
+      pageRowCount: 0,
+      lastRrdId: cursor,
+      done: true,
+      fromCache: false,
+    };
+  }
+  // Все отчёты недели пройдены.
+  if (idx >= reports.length) {
+    return { fields: [], rows: [], pageRowCount: 0, lastRrdId: cursor, done: true, fromCache: false };
+  }
+
+  const arr = await fetchDetailed(token, reports[idx].reportId, rrdId);
 
   // Список полей — объединение ключей всех строк (WB может опускать поля).
   const fieldSet = new Set<string>();
   for (const r of arr) for (const k of Object.keys(r)) fieldSet.add(k);
   const fields = [...fieldSet];
 
-  let lastRrdId = rrdid;
+  let maxRrd = rrdId;
   const rows = arr.map((r) => {
     const id = Number(r.rrd_id);
-    if (!Number.isNaN(id)) lastRrdId = id;
+    if (!Number.isNaN(id) && id > maxRrd) maxRrd = id;
     return fields.map((f) => (r[f] === undefined ? null : r[f]));
   });
 
-  const page = {
-    fields,
-    rows,
-    pageRowCount: arr.length,
-    lastRrdId,
-    done: arr.length < WB_PAGE_LIMIT,
-  };
-  // Пустая ПЕРВАЯ страница — почти всегда «WB ещё не сформировал отчёт за
-  // неделю» (он появляется в понедельник в течение дня), а не пустая неделя.
-  // Такое кэшировать нельзя: иначе неделя навсегда останется «готовой» и пустой.
-  if (!(rrdid === 0 && arr.length === 0)) {
+  // Этот отчёт закончился, если строк пришло меньше, чем просили.
+  const reportDone = arr.length < WB_PAGE_LIMIT;
+  const lastCursor: PageCursor = reportDone ? `${idx + 1}:0` : `${idx}:${maxRrd}`;
+  const done = reportDone && idx + 1 >= reports.length;
+
+  const page = { fields, rows, pageRowCount: arr.length, lastRrdId: lastCursor, done };
+
+  // Пустую ПЕРВУЮ страницу не кэшируем: обычно это «отчёт ещё не сформирован».
+  if (!(isFirstPage(cursor) && arr.length === 0)) {
     try {
-      await putCachedPage(dateFrom, dateTo, rrdid, page);
+      await putCachedPage(dateFrom, dateTo, cursor, page);
     } catch {
-      // Кэш — best effort: не срываем выдачу, если не удалось сохранить.
+      /* кэш — best effort: не срываем выдачу, если не удалось сохранить */
     }
   }
   return { ...page, fromCache: false };
@@ -174,10 +161,10 @@ export interface WbPage {
   matched: unknown[][];
   /** Всего строк в странице (до фильтра). */
   pageRowCount: number;
-  /** Уникальные баркоды, встреченные в этой странице (для статистики). */
+  /** Уникальные коды товара, встреченные в этой странице (для статистики). */
   pageBarcodes: string[];
   /** Курсор для следующей страницы. */
-  lastRrdId: number;
+  lastRrdId: PageCursor;
   /** Больше страниц нет. */
   done: boolean;
   /** Страница пришла из кэша — клиенту не нужно ждать лимит WB. */
@@ -185,17 +172,17 @@ export interface WbPage {
 }
 
 /**
- * Тянет ОДНУ страницу отчёта (кэш или WB), фильтрует по набору баркодов и
+ * Тянет ОДНУ страницу отчёта (кэш или WB), фильтрует по набору кодов товара и
  * раскладывает строки по позициям шаблона. Пагинацию ведёт вызывающий код.
  */
 export async function fetchWbReportPage(
   token: string,
   dateFrom: string,
   dateTo: string,
-  rrdid: number,
+  cursor: PageCursor,
   barcodes: Set<string>
 ): Promise<WbPage> {
-  const page = await loadPage(token, dateFrom, dateTo, rrdid);
+  const page = await loadPage(token, dateFrom, dateTo, cursor);
 
   // Индексы сырых полей: для каждой колонки шаблона — откуда брать значение.
   const fieldIdx = new Map<string, number>();

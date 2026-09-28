@@ -18,13 +18,16 @@ import { createHash } from "node:crypto";
  * просто ничего не делают.
  */
 
+/** Курсор страницы: число (старый формат) или «индекс отчёта:rrdId». */
+export type PageCursor = number | string;
+
 export interface CachedPage {
   /** Имена полей WB API в порядке значений в `rows`. */
   fields: string[];
   /** Все строки страницы: массивы значений в порядке `fields`. */
   rows: unknown[][];
   pageRowCount: number;
-  lastRrdId: number;
+  lastRrdId: PageCursor;
   done: boolean;
 }
 
@@ -32,7 +35,7 @@ interface Stored extends CachedPage {
   v: 2;
   dateFrom: string;
   dateTo: string;
-  rrdid: number;
+  rrdid: PageCursor;
   savedAt: string;
 }
 
@@ -43,7 +46,7 @@ function enabled(): boolean {
   return !!process.env.BLOB_READ_WRITE_TOKEN;
 }
 
-function keyFor(dateFrom: string, dateTo: string, rrdid: number): string {
+function keyFor(dateFrom: string, dateTo: string, rrdid: PageCursor): string {
   const salt = process.env.CRON_SECRET ?? process.env.BLOB_READ_WRITE_TOKEN ?? "";
   const h = createHash("sha256")
     .update(`${salt}|${VERSION}|${dateFrom}|${dateTo}|${rrdid}`)
@@ -56,7 +59,7 @@ function keyFor(dateFrom: string, dateTo: string, rrdid: number): string {
 export async function getCachedPage(
   dateFrom: string,
   dateTo: string,
-  rrdid: number
+  rrdid: PageCursor
 ): Promise<CachedPage | null> {
   if (!enabled()) return null;
   try {
@@ -71,7 +74,7 @@ export async function getCachedPage(
     if (stored.v !== 2 || !Array.isArray(stored.rows) || !Array.isArray(stored.fields)) return null;
     // Пустая первая страница = отчёт на момент скачивания ещё не был сформирован.
     // Считаем, что в кэше её нет, чтобы неделю запросили у WB заново.
-    if (rrdid === 0 && stored.rows.length === 0) return null;
+    if ((rrdid === 0 || rrdid === "0" || rrdid === "0:0") && stored.rows.length === 0) return null;
     return {
       fields: stored.fields,
       rows: stored.rows,
@@ -105,7 +108,7 @@ const V1_FIELDS = [
   "rebill_logistic_org", "storage_fee", "deduction", "acceptance", "srid", "rrd_id", "report_type",
 ];
 
-function keyForV1(dateFrom: string, dateTo: string, rrdid: number): string {
+function keyForV1(dateFrom: string, dateTo: string, rrdid: PageCursor): string {
   const salt = process.env.CRON_SECRET ?? process.env.BLOB_READ_WRITE_TOKEN ?? "";
   const h = createHash("sha256")
     .update(`${salt}|${dateFrom}|${dateTo}|${rrdid}`)
@@ -118,7 +121,7 @@ function keyForV1(dateFrom: string, dateTo: string, rrdid: number): string {
 export async function getCachedPageV1(
   dateFrom: string,
   dateTo: string,
-  rrdid: number
+  rrdid: PageCursor
 ): Promise<CachedPage | null> {
   if (!enabled()) return null;
   try {
@@ -157,19 +160,19 @@ export async function getCachedPageV1(
 export async function deleteLegacyWeek(dateFrom: string, dateTo: string): Promise<number> {
   if (!enabled()) return 0;
   let removed = 0;
-  let rrdid = 0;
+  let rrdid: PageCursor = 0;
   for (let guard = 0; guard < 50; guard++) {
     const key = keyForV1(dateFrom, dateTo, rrdid);
     const { blobs } = await list({ prefix: key, limit: 1 });
     const blob = blobs.find((b) => b.pathname === key);
     if (!blob) break;
     // Узнаём курсор следующей страницы до удаления.
-    let next: number | null = null;
+    let next: PageCursor | null = null;
     let done = true;
     try {
       const res = await fetch(blob.url, { cache: "no-store" });
       const stored = JSON.parse(gunzipSync(Buffer.from(await res.arrayBuffer())).toString("utf8")) as {
-        lastRrdId: number;
+        lastRrdId: PageCursor;
         done: boolean;
       };
       next = stored.lastRrdId;
@@ -185,11 +188,62 @@ export async function deleteLegacyWeek(dateFrom: string, dateTo: string): Promis
   return removed;
 }
 
+/**
+ * Список отчётов недели (метод sales-reports/list). У закрытой недели он не
+ * меняется, а лимит запросов к WB общий — поэтому держим его в кэше, чтобы не
+ * тратить окно на повторный вызов перед каждой страницей.
+ */
+function keyForReports(dateFrom: string, dateTo: string): string {
+  const salt = process.env.CRON_SECRET ?? process.env.BLOB_READ_WRITE_TOKEN ?? "";
+  const h = createHash("sha256")
+    .update(`${salt}|reports|${dateFrom}|${dateTo}`)
+    .digest("hex")
+    .slice(0, 40);
+  return `${PREFIX}${h}.json.gz`;
+}
+
+export async function getCachedReports(
+  dateFrom: string,
+  dateTo: string
+): Promise<unknown[] | null> {
+  if (!enabled()) return null;
+  try {
+    const key = keyForReports(dateFrom, dateTo);
+    const { blobs } = await list({ prefix: key, limit: 1 });
+    const blob = blobs.find((b) => b.pathname === key);
+    if (!blob) return null;
+    const res = await fetch(blob.url, { cache: "no-store" });
+    if (!res.ok) return null;
+    const stored = JSON.parse(gunzipSync(Buffer.from(await res.arrayBuffer())).toString("utf8"));
+    return Array.isArray(stored?.reports) && stored.reports.length ? stored.reports : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function putCachedReports(
+  dateFrom: string,
+  dateTo: string,
+  reports: unknown[]
+): Promise<void> {
+  if (!enabled()) return;
+  const gz = gzipSync(
+    Buffer.from(JSON.stringify({ dateFrom, dateTo, savedAt: new Date().toISOString(), reports }), "utf8")
+  );
+  await put(keyForReports(dateFrom, dateTo), gz, {
+    access: "public",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/gzip",
+    cacheControlMaxAge: 0,
+  });
+}
+
 /** Сохраняет страницу в кэш (перезаписывает, если уже есть). */
 export async function putCachedPage(
   dateFrom: string,
   dateTo: string,
-  rrdid: number,
+  rrdid: PageCursor,
   page: CachedPage
 ): Promise<void> {
   if (!enabled()) return;

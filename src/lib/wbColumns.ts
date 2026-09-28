@@ -33,7 +33,7 @@ export const TEMPLATE: TemplateColumn[] = [
   { col: "D", name: "Код номенклатуры", key: "nm_id" },
   { col: "E", name: "Бренд", key: "brand_name" },
   { col: "F", name: "Артикул поставщика", key: "sa_name" },
-  { col: "G", name: "Название", key: null },
+  { col: "G", name: "Название", key: "title" }, // появилось в новом API WB
   { col: "H", name: "Размер", key: "ts_name" },
   { col: "I", name: "Баркод", key: "barcode", required: true },
   { col: "J", name: "Тип документа", key: "doc_type_name", required: true },

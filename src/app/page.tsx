@@ -218,7 +218,8 @@ export default function Home() {
       const matched: ReportRow[] = [];
       const barcodeSet = new Set<string>();
       let columns: string[] = WB_TEMPLATE_COLUMNS;
-      let rrdid = 0;
+      // Курсор страницы: сервер сам решает, что в нём (число или «отчёт:rrdId»).
+      let rrdid: number | string = 0;
       let done = false;
       let totalRows = 0;
       let page = 0;
